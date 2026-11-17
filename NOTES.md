@@ -10,7 +10,7 @@ The initial scheduler model is in `src/scheduler.rs`:
 
 - `Task` stores an ID, name, priority, deadline tick, deadline type, simulated cost, and behavior type.
 - `DeadlineType` distinguishes hard, soft, and event-driven work.
-- `BehaviorType` identifies movement, chasing, collision checks, periodic color changes, and collision-triggered color changes. The color behaviors are retained for the examples but are not used by the main application.
+- `BehaviorType` identifies movement, chasing, fleeing, pouncing, knockback, collision checks, periodic color changes, and collision-triggered color changes. The color behaviors are retained for the examples but are not used by the main application.
 - `Scheduler` defines the queue operations required by scheduler implementations.
 - `FifoScheduler` is the baseline implementation and supports re-queuing unfinished work.
 
@@ -78,8 +78,20 @@ backlog from creating an artificial burst.
 When the hamsters collide, one is randomly selected as the predator and the
 other becomes the prey. The predator steers toward the prey for five simulated
 seconds. The prey continues waypoint movement, and both hamsters move at 1.5
-times their normal speed until the chase ends. The HUD identifies chasing and
-fleeing states and shows the remaining chase time.
+times their normal speed until the chase ends. The fleeing hamster continues
+waypoint movement at twice its normal speed. The HUD identifies chasing and
+fleeing states and shows the remaining chase time. An active chase is not
+restarted by repeated collisions. Hamster-to-hamster collision overlap is
+separated once and guarded by a 0.75-second cooldown so that repeated contacts
+do not produce infinite velocity swaps or attach the hamsters together.
+
+A three-hamster encounter includes **Meep**, **Beep**, and **Peep**. A fleeing
+hamster moves away from the closest hamster rather than following a fixed
+waypoint. The other hamster in a collision randomly chooses either Chase or
+Pounce. Pounce pauses for 0.5 to 1.0 seconds, then launches at 3.5 times normal
+speed. When a chase or pounce collision reaches the fleeing hamster, the prey is
+punched into Knockback at 5 times normal speed, bounces linearly off walls and
+objects, decays for each collision and over time, then returns to normal behavior.
 
 ## Timing model
 

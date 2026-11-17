@@ -16,6 +16,9 @@ pub enum DeadlineType {
 pub enum BehaviorType {
     Movement,
     Chasing,
+    Fleeing,
+    Pouncing,
+    Knockback,
     CollisionCheck,
     PeriodicColorChange,
     CollisionColorChange,

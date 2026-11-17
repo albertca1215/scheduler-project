@@ -14,14 +14,32 @@ struct Hamster {
     chase_target: Option<usize>,
     chase_remaining: f32,
     chase_active: bool,
+    collision_cooldown: f32,
+    action: HamsterAction,
+    pounce_remaining: f32,
+    knockback_remaining: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HamsterAction {
+    Normal,
+    Chase,
+    Pounce,
+    Flee,
+    Knockback,
 }
 
 const CHASE_DURATION: f32 = 5.0;
 const CHASE_SPEED_MULTIPLIER: f32 = 1.5;
+const FLEE_SPEED_MULTIPLIER: f32 = 2.0;
+const POUNCE_LAUNCH_SPEED_MULTIPLIER: f32 = 3.5;
+const PUNCH_SPEED_MULTIPLIER: f32 = 5.0;
+const KNOCKBACK_DECAY_PER_SECOND: f32 = 0.82;
 const MIN_STEP_INTERVAL: f32 = 0.001;
 const MAX_STEP_INTERVAL: f32 = 1.0;
 const STEP_INTERVAL_CHANGE: f32 = 0.05;
 const MAX_CATCH_UP_STEPS: usize = 100;
+const COLLISION_COOLDOWN: f32 = 0.75;
 
 impl Hamster {
     fn new(name: impl Into<String>, position: Vec2, velocity: Vec2) -> Self {
@@ -35,7 +53,15 @@ impl Hamster {
             chase_target: None,
             chase_remaining: 0.0,
             chase_active: false,
+            collision_cooldown: 0.0,
+            action: HamsterAction::Normal,
+            pounce_remaining: 0.0,
+            knockback_remaining: 0.0,
         }
+    }
+
+    fn update_collision_cooldown(&mut self, delta_time: f32) {
+        self.collision_cooldown = (self.collision_cooldown - delta_time).max(0.0);
     }
 
     fn is_chasing(&self) -> bool {
@@ -48,7 +74,23 @@ impl Hamster {
             if self.chase_remaining == 0.0 {
                 self.chase_target = None;
                 self.chase_active = false;
+                self.action = HamsterAction::Normal;
+                self.pounce_remaining = 0.0;
             }
+        }
+    }
+
+    fn update_knockback(&mut self, delta_time: f32) {
+        if self.action != HamsterAction::Knockback {
+            return;
+        }
+        self.knockback_remaining = (self.knockback_remaining - delta_time).max(0.0);
+        self.entity.velocity *= KNOCKBACK_DECAY_PER_SECOND.powf(delta_time);
+
+        if self.entity.velocity.length() <= self.normal_speed || self.knockback_remaining == 0.0 {
+            self.entity.velocity = self.entity.velocity.normalize_or_zero() * self.normal_speed;
+            self.action = HamsterAction::Normal;
+            self.knockback_remaining = 0.0;
         }
     }
 
@@ -59,16 +101,56 @@ impl Hamster {
         self.entity.velocity = self.entity.velocity.lerp(desired_velocity, steering);
     }
 
-    fn update_movement(&mut self, target_position: Option<Vec2>, delta_time: f32) {
-        if !self.is_chasing() && self.entity.position.distance(self.waypoint) < self.entity.radius {
+    fn update_movement(
+        &mut self,
+        target_position: Option<Vec2>,
+        flee_from: Option<Vec2>,
+        delta_time: f32,
+    ) {
+        if self.action == HamsterAction::Pounce {
+            if self.pounce_remaining > 0.0 {
+                self.pounce_remaining = (self.pounce_remaining - delta_time).max(0.0);
+                self.entity.velocity = Vec2::ZERO;
+                if self.pounce_remaining == 0.0 {
+                    if let Some(target) = target_position {
+                        let direction = (target - self.entity.position).normalize_or_zero();
+                        self.entity.velocity =
+                            direction * self.normal_speed * POUNCE_LAUNCH_SPEED_MULTIPLIER;
+                    }
+                }
+            }
+            return;
+        }
+
+        if self.action == HamsterAction::Knockback {
+            self.entity.position += self.entity.velocity * delta_time;
+            return;
+        }
+
+        if matches!(self.action, HamsterAction::Normal | HamsterAction::Flee)
+            && self.entity.position.distance(self.waypoint) < self.entity.radius
+        {
             self.waypoint = random_waypoint(self.entity.radius);
         }
 
-        let target = target_position.unwrap_or(self.waypoint);
-        let speed = if self.is_chasing() {
-            self.normal_speed * CHASE_SPEED_MULTIPLIER
-        } else {
-            self.normal_speed
+        let (target, speed) = match self.action {
+            HamsterAction::Chase => (
+                target_position.unwrap_or(self.waypoint),
+                self.normal_speed * CHASE_SPEED_MULTIPLIER,
+            ),
+            HamsterAction::Flee => {
+                let away = flee_from
+                    .map(|closest| self.entity.position - closest)
+                    .filter(|direction| direction.length_squared() > f32::EPSILON)
+                    .unwrap_or(vec2(1.0, 0.0))
+                    .normalize();
+                (
+                    self.entity.position + away * 500.0,
+                    self.normal_speed * FLEE_SPEED_MULTIPLIER,
+                )
+            }
+            HamsterAction::Normal => (self.waypoint, self.normal_speed),
+            HamsterAction::Pounce | HamsterAction::Knockback => (self.entity.position, 0.0),
         };
         self.steer_toward(target, speed, delta_time);
     }
@@ -92,33 +174,32 @@ fn movement_direction(velocity: Vec2) -> &'static str {
     }
 }
 
-fn schedule_frame_tasks(engine: &mut FixedTickEngine<FifoScheduler>, hamsters: &[Hamster; 2]) {
+fn schedule_frame_tasks(engine: &mut FixedTickEngine<FifoScheduler>, hamsters: &[Hamster; 3]) {
     let tick = engine.current_tick();
-    let first_task_id = tick * 4 + 1;
+    let first_task_id = tick * 6 + 1;
 
-    for hamster_index in 0..2 {
+    for hamster_index in 0..3 {
         let task_offset = hamster_index * 2;
         let hamster_index = hamster_index as usize;
+        let activity = if hamsters[hamster_index].is_chasing() {
+            match hamsters[hamster_index].action {
+                HamsterAction::Chase => ("Chase", BehaviorType::Chasing),
+                HamsterAction::Pounce => ("Pounce", BehaviorType::Pouncing),
+                HamsterAction::Flee => ("Flee", BehaviorType::Fleeing),
+                HamsterAction::Knockback => ("Knockback", BehaviorType::CollisionCheck),
+                HamsterAction::Normal => ("Move", BehaviorType::Movement),
+            }
+        } else {
+            ("Move", BehaviorType::Movement)
+        };
         engine.add_task(Task::new(
             first_task_id + task_offset,
-            format!(
-                "{} {}",
-                if hamsters[hamster_index].is_chasing() {
-                    "Chase"
-                } else {
-                    "Move"
-                },
-                hamsters[hamster_index].name
-            ),
+            format!("{} {}", activity.0, hamsters[hamster_index].name),
             10,
             tick + 1,
             DeadlineType::Hard,
             1,
-            if hamsters[hamster_index].chase_target.is_some() {
-                BehaviorType::Chasing
-            } else {
-                BehaviorType::Movement
-            },
+            activity.1,
         ));
         engine.add_task(Task::new(
             first_task_id + task_offset + 1,
@@ -132,28 +213,32 @@ fn schedule_frame_tasks(engine: &mut FixedTickEngine<FifoScheduler>, hamsters: &
     }
 }
 
-fn task_description(task_id: u64, hamsters: &[Hamster; 2]) -> String {
-    let hamster_name = match task_id % 4 {
-        1 | 2 => &hamsters[0].name,
-        3 | 0 => &hamsters[1].name,
-        _ => unreachable!("task IDs are assigned to one of four FIFO activities"),
+fn task_description(task_id: u64, hamsters: &[Hamster; 3]) -> String {
+    let movement_residue = match task_id % 6 {
+        1 => Some((0, "Movement")),
+        3 => Some((1, "Movement")),
+        5 => Some((2, "Movement")),
+        _ => None,
     };
+    if let Some((index, normal_label)) = movement_residue {
+        let action = match hamsters[index].action {
+            HamsterAction::Chase => format!(
+                "Chasing {}",
+                hamsters[hamsters[index].chase_target.unwrap_or(index)].name
+            ),
+            HamsterAction::Pounce => "Pouncing".to_string(),
+            HamsterAction::Flee => "Fleeing".to_string(),
+            HamsterAction::Knockback => "Knocked back".to_string(),
+            HamsterAction::Normal => normal_label.to_string(),
+        };
+        return format!("{}: {}", hamsters[index].name, action);
+    }
 
-    match task_id % 4 {
-        1 | 3 => {
-            let hamster_index = if task_id % 4 == 1 { 0 } else { 1 };
-            if hamsters[hamster_index].is_chasing() {
-                if let Some(target_index) = hamsters[hamster_index].chase_target {
-                    format!("{hamster_name}: Chasing {}", hamsters[target_index].name)
-                } else {
-                    format!("{hamster_name}: Fleeing")
-                }
-            } else {
-                format!("{hamster_name}: Movement")
-            }
-        }
-        2 | 0 => format!("{hamster_name}: Collision check"),
-        _ => unreachable!("task IDs are assigned to one of four FIFO activities"),
+    match task_id % 6 {
+        2 => format!("{}: Collision check", hamsters[0].name),
+        4 => format!("{}: Collision check", hamsters[1].name),
+        0 => format!("{}: Collision check", hamsters[2].name),
+        _ => "Unknown task".to_string(),
     }
 }
 
@@ -183,39 +268,122 @@ fn check_collision(entity: &mut Entity) -> bool {
     bounced
 }
 
-fn check_hamster_collision(hamsters: &mut [Hamster; 2]) -> bool {
-    let [first, second] = hamsters;
-    let offset = second.entity.position - first.entity.position;
-    let distance = offset.length();
-    let minimum_distance = first.entity.radius + second.entity.radius;
+fn check_hamster_collisions(hamsters: &mut [Hamster; 3]) -> Vec<(usize, usize)> {
+    let mut collisions = Vec::new();
 
-    if distance >= minimum_distance {
-        return false;
+    for first_index in 0..hamsters.len() {
+        for second_index in (first_index + 1)..hamsters.len() {
+            let offset =
+                hamsters[second_index].entity.position - hamsters[first_index].entity.position;
+            let distance = offset.length();
+            let minimum_distance =
+                hamsters[first_index].entity.radius + hamsters[second_index].entity.radius;
+
+            if distance >= minimum_distance {
+                continue;
+            }
+            if hamsters[first_index].collision_cooldown > 0.0
+                || hamsters[second_index].collision_cooldown > 0.0
+            {
+                continue;
+            }
+
+            let normal = if distance > f32::EPSILON {
+                offset / distance
+            } else {
+                vec2(1.0, 0.0)
+            };
+            let separation = (minimum_distance - distance) / 2.0;
+            hamsters[first_index].entity.position -= normal * separation;
+            hamsters[second_index].entity.position += normal * separation;
+
+            let first_normal = hamsters[first_index].entity.velocity.dot(normal);
+            let second_normal = hamsters[second_index].entity.velocity.dot(normal);
+            hamsters[first_index].entity.velocity += normal * (second_normal - first_normal);
+            hamsters[second_index].entity.velocity += normal * (first_normal - second_normal);
+
+            hamsters[first_index].collision_cooldown = COLLISION_COOLDOWN;
+            hamsters[second_index].collision_cooldown = COLLISION_COOLDOWN;
+            hamsters[first_index].collisions += 1;
+            hamsters[second_index].collisions += 1;
+            collisions.push((first_index, second_index));
+        }
     }
 
-    let normal = if distance > f32::EPSILON {
-        offset / distance
-    } else {
-        vec2(1.0, 0.0)
-    };
-    let separation = (minimum_distance - distance) / 2.0;
-    first.entity.position -= normal * separation;
-    second.entity.position += normal * separation;
-    std::mem::swap(&mut first.entity.velocity, &mut second.entity.velocity);
-    first.collisions += 1;
-    second.collisions += 1;
-    true
+    collisions
 }
 
-fn start_chase(hamsters: &mut [Hamster; 2]) {
-    let predator = rand::gen_range(0usize, 2usize);
-    let prey = 1 - predator;
+fn start_encounter(hamsters: &mut [Hamster; 3], first: usize, second: usize) {
+    if hamsters.iter().any(Hamster::is_chasing) {
+        return;
+    }
+
+    let prey = if rand::gen_range(0, 2) == 0 {
+        first
+    } else {
+        second
+    };
+    let predator = if prey == first { second } else { first };
+    hamsters[prey].action = HamsterAction::Flee;
     hamsters[prey].chase_target = None;
     hamsters[prey].chase_active = true;
     hamsters[prey].chase_remaining = CHASE_DURATION;
+
+    if rand::gen_range(0, 2) == 0 {
+        hamsters[predator].action = HamsterAction::Chase;
+    } else {
+        hamsters[predator].action = HamsterAction::Pounce;
+        hamsters[predator].pounce_remaining = rand::gen_range(0.5, 1.0);
+    }
     hamsters[predator].chase_target = Some(prey);
     hamsters[predator].chase_active = true;
     hamsters[predator].chase_remaining = CHASE_DURATION;
+}
+
+fn punch_fleeing_hamster(hamsters: &mut [Hamster; 3], hunter: usize, prey: usize) {
+    if hamsters[prey].action != HamsterAction::Flee {
+        return;
+    }
+    match hamsters[hunter].action {
+        HamsterAction::Chase => {}
+        HamsterAction::Pounce if hamsters[hunter].pounce_remaining == 0.0 => {}
+        _ => return,
+    }
+
+    let direction =
+        (hamsters[prey].entity.position - hamsters[hunter].entity.position).normalize_or_zero();
+    hamsters[prey].entity.velocity =
+        direction * hamsters[prey].normal_speed * PUNCH_SPEED_MULTIPLIER;
+    hamsters[prey].action = HamsterAction::Knockback;
+    hamsters[prey].chase_target = None;
+    hamsters[prey].chase_active = false;
+    hamsters[prey].chase_remaining = 0.0;
+    hamsters[prey].knockback_remaining = 2.0;
+
+    hamsters[hunter].action = HamsterAction::Normal;
+    hamsters[hunter].chase_target = None;
+    hamsters[hunter].chase_active = false;
+    hamsters[hunter].chase_remaining = 0.0;
+    hamsters[hunter].pounce_remaining = 0.0;
+}
+
+fn closest_other_position(hamsters: &[Hamster; 3], index: usize) -> Option<Vec2> {
+    hamsters
+        .iter()
+        .enumerate()
+        .filter(|(other_index, _)| *other_index != index)
+        .min_by(|(_, first), (_, second)| {
+            let first_distance = first
+                .entity
+                .position
+                .distance(hamsters[index].entity.position);
+            let second_distance = second
+                .entity
+                .position
+                .distance(hamsters[index].entity.position);
+            first_distance.total_cmp(&second_distance)
+        })
+        .map(|(_, hamster)| hamster.entity.position)
 }
 
 fn draw_hamster(texture: &Texture2D, hamster: &Hamster) {
@@ -262,6 +430,11 @@ async fn main() {
             "Beep",
             vec2(screen_width() * 0.7, screen_height() * 0.55),
             vec2(-150.0, 190.0),
+        ),
+        Hamster::new(
+            "Peep",
+            vec2(screen_width() * 0.5, screen_height() * 0.25),
+            vec2(170.0, -160.0),
         ),
     ];
     let mut engine = FixedTickEngine::new(FifoScheduler::new(), 1);
@@ -310,18 +483,20 @@ async fn main() {
                 completed_this_frame += report.completed_task_ids.len();
                 for hamster in &mut hamsters {
                     hamster.update_chase(step_interval);
+                    hamster.update_collision_cooldown(step_interval);
                 }
 
                 for task_id in &report.completed_task_ids {
                     active_task = task_description(*task_id, &hamsters);
-                    let task_kind = *task_id % 4;
+                    let task_kind = *task_id % 6;
                     let hamster_index = match task_kind {
                         1 | 2 => 0,
-                        0 | 3 => 1,
-                        _ => unreachable!("task IDs are assigned to one of two hamsters"),
+                        3 | 4 => 1,
+                        5 | 0 => 2,
+                        _ => unreachable!("task IDs are assigned to one of three hamsters"),
                     };
                     match task_kind {
-                        1 | 3 => {
+                        1 | 3 | 5 => {
                             let movement_delta = if real_time_mode {
                                 step_interval * 4.0
                             } else {
@@ -330,14 +505,26 @@ async fn main() {
                             let target_position = hamsters[hamster_index]
                                 .chase_target
                                 .map(|index| hamsters[index].entity.position);
+                            let flee_from = closest_other_position(&hamsters, hamster_index);
                             let hamster = &mut hamsters[hamster_index];
-                            hamster.update_movement(target_position, movement_delta);
+                            hamster.update_movement(
+                                target_position,
+                                if hamster.action == HamsterAction::Flee {
+                                    flee_from
+                                } else {
+                                    None
+                                },
+                                movement_delta,
+                            );
                             hamster.entity.position += hamster.entity.velocity * movement_delta;
                             if check_collision(&mut hamster.entity) {
+                                if hamster.action == HamsterAction::Knockback {
+                                    hamster.entity.velocity *= 0.82;
+                                }
                                 hamster.collisions += 1;
                             }
                         }
-                        0 | 2 => {
+                        2 | 4 | 0 => {
                             let hamster = &mut hamsters[hamster_index];
                             if check_collision(&mut hamster.entity) {
                                 hamster.collisions += 1;
@@ -346,8 +533,26 @@ async fn main() {
                         _ => unreachable!("task IDs are assigned to movement or collision checks"),
                     }
                 }
-                if check_hamster_collision(&mut hamsters) {
-                    start_chase(&mut hamsters);
+                for hamster in &mut hamsters {
+                    hamster.update_knockback(step_interval);
+                }
+                let collisions = check_hamster_collisions(&mut hamsters);
+                for (first, second) in collisions {
+                    let first_hunter = matches!(
+                        hamsters[first].action,
+                        HamsterAction::Chase | HamsterAction::Pounce
+                    );
+                    let second_hunter = matches!(
+                        hamsters[second].action,
+                        HamsterAction::Chase | HamsterAction::Pounce
+                    );
+                    if first_hunter && hamsters[second].action == HamsterAction::Flee {
+                        punch_fleeing_hamster(&mut hamsters, first, second);
+                    } else if second_hunter && hamsters[first].action == HamsterAction::Flee {
+                        punch_fleeing_hamster(&mut hamsters, second, first);
+                    } else if !hamsters.iter().any(Hamster::is_chasing) {
+                        start_encounter(&mut hamsters, first, second);
+                    }
                 }
                 steps += 1;
             }
@@ -397,15 +602,22 @@ async fn main() {
 
         for (index, hamster) in hamsters.iter().enumerate() {
             draw_hamster(&texture, hamster);
-            let behavior = if let Some(target_index) = hamster.chase_target {
-                format!(
-                    "Chasing {} ({:.1}s)",
-                    hamsters[target_index].name, hamster.chase_remaining
-                )
-            } else if hamster.is_chasing() {
-                format!("Fleeing ({:.1}s)", hamster.chase_remaining)
-            } else {
-                format!("Moving {}", movement_direction(hamster.entity.velocity))
+            let behavior = match hamster.action {
+                HamsterAction::Chase => {
+                    let target_index = hamster.chase_target.unwrap_or(index);
+                    format!(
+                        "Chasing {} ({:.1}s)",
+                        hamsters[target_index].name, hamster.chase_remaining
+                    )
+                }
+                HamsterAction::Pounce => format!("Pouncing {:.1}s", hamster.pounce_remaining),
+                HamsterAction::Flee => format!("Fleeing ({:.1}s)", hamster.chase_remaining),
+                HamsterAction::Knockback => {
+                    format!("Knocked back ({:.1}s)", hamster.knockback_remaining)
+                }
+                HamsterAction::Normal => {
+                    format!("Moving {}", movement_direction(hamster.entity.velocity))
+                }
             };
             draw_text(
                 &format!(
@@ -424,5 +636,194 @@ async fn main() {
         }
 
         next_frame().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hamsters() -> [Hamster; 3] {
+        [
+            Hamster {
+                name: "Meep".to_string(),
+                entity: Entity::new(vec2(100.0, 100.0), vec2(180.0, 0.0), 75.0, WHITE),
+                collisions: 0,
+                waypoint: vec2(500.0, 500.0),
+                normal_speed: 180.0,
+                chase_target: None,
+                chase_remaining: 0.0,
+                chase_active: false,
+                collision_cooldown: 0.0,
+                action: HamsterAction::Normal,
+                pounce_remaining: 0.0,
+                knockback_remaining: 0.0,
+            },
+            Hamster {
+                name: "Beep".to_string(),
+                entity: Entity::new(vec2(300.0, 100.0), vec2(-150.0, 0.0), 75.0, WHITE),
+                collisions: 0,
+                waypoint: vec2(500.0, 500.0),
+                normal_speed: 150.0,
+                chase_target: None,
+                chase_remaining: 0.0,
+                chase_active: false,
+                collision_cooldown: 0.0,
+                action: HamsterAction::Normal,
+                pounce_remaining: 0.0,
+                knockback_remaining: 0.0,
+            },
+            Hamster {
+                name: "Peep".to_string(),
+                entity: Entity::new(vec2(500.0, 100.0), vec2(160.0, 0.0), 75.0, WHITE),
+                collisions: 0,
+                waypoint: vec2(500.0, 500.0),
+                normal_speed: 160.0,
+                chase_target: None,
+                chase_remaining: 0.0,
+                chase_active: false,
+                collision_cooldown: 0.0,
+                action: HamsterAction::Normal,
+                pounce_remaining: 0.0,
+                knockback_remaining: 0.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn collision_assigns_one_predator_and_one_prey() {
+        let mut hamsters = hamsters();
+        start_encounter(&mut hamsters, 0, 1);
+
+        let predator_count = hamsters
+            .iter()
+            .filter(|hamster| {
+                matches!(hamster.action, HamsterAction::Chase | HamsterAction::Pounce)
+            })
+            .count();
+        let prey_count = hamsters
+            .iter()
+            .filter(|hamster| hamster.action == HamsterAction::Flee)
+            .count();
+
+        assert_eq!(predator_count, 1);
+        assert_eq!(prey_count, 1);
+    }
+
+    #[test]
+    fn active_chase_is_not_restarted_by_another_collision() {
+        let mut hamsters = hamsters();
+        start_encounter(&mut hamsters, 0, 1);
+
+        if let Some(predator) = hamsters
+            .iter_mut()
+            .find(|hamster| matches!(hamster.action, HamsterAction::Chase | HamsterAction::Pounce))
+        {
+            predator.chase_remaining = 1.25;
+        }
+        start_encounter(&mut hamsters, 0, 2);
+
+        assert!(
+            hamsters
+                .iter()
+                .find(|hamster| matches!(
+                    hamster.action,
+                    HamsterAction::Chase | HamsterAction::Pounce
+                ))
+                .is_some_and(|predator| predator.chase_remaining == 1.25)
+        );
+    }
+
+    #[test]
+    fn chase_expires_after_five_seconds() {
+        let mut hamsters = hamsters();
+        start_encounter(&mut hamsters, 0, 1);
+
+        for hamster in &mut hamsters {
+            hamster.update_chase(CHASE_DURATION);
+        }
+
+        assert!(hamsters.iter().all(|hamster| !hamster.is_chasing()));
+        assert!(
+            hamsters
+                .iter()
+                .all(|hamster| hamster.chase_target.is_none())
+        );
+    }
+
+    #[test]
+    fn prey_moves_twice_as_fast_as_normal() {
+        let mut hamsters = hamsters();
+        start_encounter(&mut hamsters, 0, 1);
+        let predator_index = hamsters
+            .iter()
+            .position(|hamster| {
+                matches!(hamster.action, HamsterAction::Chase | HamsterAction::Pounce)
+            })
+            .expect("a predator should be assigned");
+        let prey_index = 1 - predator_index;
+        let normal_speed = hamsters[prey_index].normal_speed;
+
+        hamsters[prey_index].update_movement(None, Some(vec2(500.0, 100.0)), 0.01);
+
+        assert!(
+            (hamsters[prey_index].entity.velocity.length() - normal_speed * FLEE_SPEED_MULTIPLIER)
+                < 1.0
+        );
+        assert!(
+            (normal_speed * FLEE_SPEED_MULTIPLIER - normal_speed * CHASE_SPEED_MULTIPLIER) > 0.0
+        );
+    }
+
+    #[test]
+    fn repeated_overlap_is_blocked_during_collision_cooldown() {
+        let mut hamsters = hamsters();
+        hamsters[1].entity.position = hamsters[0].entity.position
+            + vec2(
+                hamsters[0].entity.radius + hamsters[1].entity.radius - 10.0,
+                0.0,
+            );
+
+        assert_eq!(check_hamster_collisions(&mut hamsters).len(), 1);
+        let first_velocity = hamsters[0].entity.velocity;
+        let second_velocity = hamsters[1].entity.velocity;
+        let first_collisions = hamsters[0].collisions;
+        let second_collisions = hamsters[1].collisions;
+
+        assert!(check_hamster_collisions(&mut hamsters).is_empty());
+        assert_eq!(hamsters[0].entity.velocity, first_velocity);
+        assert_eq!(hamsters[1].entity.velocity, second_velocity);
+        assert_eq!(hamsters[0].collisions, first_collisions);
+        assert_eq!(hamsters[1].collisions, second_collisions);
+    }
+
+    #[test]
+    fn pounce_waits_then_launches_at_target() {
+        let mut hamsters = hamsters();
+        hamsters[0].action = HamsterAction::Pounce;
+        hamsters[0].chase_target = Some(1);
+        hamsters[0].pounce_remaining = 0.5;
+
+        hamsters[0].update_movement(Some(hamsters[1].entity.position), None, 0.5);
+
+        assert_eq!(hamsters[0].pounce_remaining, 0.0);
+        assert!(hamsters[0].entity.velocity.length() > hamsters[0].normal_speed);
+    }
+
+    #[test]
+    fn punch_sends_prey_into_knockback() {
+        let mut hamsters = hamsters();
+        hamsters[0].action = HamsterAction::Chase;
+        hamsters[0].chase_target = Some(1);
+        hamsters[1].action = HamsterAction::Flee;
+
+        punch_fleeing_hamster(&mut hamsters, 0, 1);
+
+        assert_eq!(hamsters[1].action, HamsterAction::Knockback);
+        assert!(hamsters[1].knockback_remaining > 0.0);
+        assert!(
+            hamsters[1].entity.velocity.length()
+                >= hamsters[1].normal_speed * PUNCH_SPEED_MULTIPLIER - 1.0
+        );
     }
 }
