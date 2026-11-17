@@ -85,6 +85,14 @@ restarted by repeated collisions. Hamster-to-hamster collision overlap is
 separated once and guarded by a 0.75-second cooldown so that repeated contacts
 do not produce infinite velocity swaps or attach the hamsters together.
 
+Knockback impacts now use an equal-mass pool-ball impulse model. The vector
+between two overlapping hamsters is the contact normal. Incoming velocity is
+split into normal and tangent components: the normal component is transferred
+to the struck hamster, and the tangent component is retained for a glancing
+deflection. The 0.92 restitution factor reduces transferred speed while wall
+impacts and subsequent knockback collisions continue to decay velocity until
+the struck hamster returns to normal movement.
+
 A three-hamster encounter includes **Meep**, **Beep**, and **Peep**. A fleeing
 hamster moves away from the closest hamster rather than following a fixed
 waypoint. The other hamster in a collision randomly chooses either Chase or
@@ -92,6 +100,12 @@ Pounce. Pounce pauses for 0.5 to 1.0 seconds, then launches at 3.5 times normal
 speed. When a chase or pounce collision reaches the fleeing hamster, the prey is
 punched into Knockback at 5 times normal speed, bounces linearly off walls and
 objects, decays for each collision and over time, then returns to normal behavior.
+
+When a knocked-back hamster strikes another hamster, that struck hamster
+overrides Pounce, Chase, Flee, or Normal behavior and enters Knockback
+immediately. A new encounter is not assigned while any hamster is in Knockback,
+preventing knockback impact from being replaced by a scheduled Pounce or Flee
+state.
 
 ## Timing model
 

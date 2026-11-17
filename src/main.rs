@@ -1,3 +1,6 @@
+// LLM Disclosure: Parts of this application, including comments and dynamic behavior
+// state logic, were generated or modified with assistance from a large language model.
+
 use macroquad::prelude::*;
 use scheduler_project::entity::Entity;
 use scheduler_project::scheduler::{
@@ -6,18 +9,18 @@ use scheduler_project::scheduler::{
 use std::time::Instant;
 
 struct Hamster {
-    name: String,
-    entity: Entity,
-    collisions: u64,
-    waypoint: Vec2,
-    normal_speed: f32,
-    chase_target: Option<usize>,
-    chase_remaining: f32,
-    chase_active: bool,
-    collision_cooldown: f32,
-    action: HamsterAction,
-    pounce_remaining: f32,
-    knockback_remaining: f32,
+    name: String,                // Display name and task label.
+    entity: Entity,              // Position, velocity, radius, and rendered color.
+    collisions: u64,             // Total wall and hamster collisions recorded.
+    waypoint: Vec2,              // Random destination used during normal movement.
+    normal_speed: f32,           // Speed restored after chase or knockback ends.
+    chase_target: Option<usize>, // Target hamster during Chase/Pounce.
+    chase_remaining: f32,        // Seconds remaining in the active encounter.
+    chase_active: bool,          // Whether an encounter timer is currently running.
+    collision_cooldown: f32,     // Short period preventing repeated overlap contacts.
+    action: HamsterAction,       // Current behavior selected by the state machine.
+    pounce_remaining: f32,       // Delay before Pounce launches.
+    knockback_remaining: f32,    // Time remaining before normal behavior returns.
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,12 +32,13 @@ enum HamsterAction {
     Knockback,
 }
 
-const CHASE_DURATION: f32 = 5.0;
-const CHASE_SPEED_MULTIPLIER: f32 = 1.5;
-const FLEE_SPEED_MULTIPLIER: f32 = 2.0;
-const POUNCE_LAUNCH_SPEED_MULTIPLIER: f32 = 3.5;
-const PUNCH_SPEED_MULTIPLIER: f32 = 5.0;
-const KNOCKBACK_DECAY_PER_SECOND: f32 = 0.82;
+const CHASE_DURATION: f32 = 5.0; // Encounter timer for hunter and prey.
+const CHASE_SPEED_MULTIPLIER: f32 = 1.5; // Chase velocity scale.
+const FLEE_SPEED_MULTIPLIER: f32 = 2.0; // Prey velocity scale.
+const POUNCE_LAUNCH_SPEED_MULTIPLIER: f32 = 3.5; // Pounce launch velocity scale.
+const PUNCH_SPEED_MULTIPLIER: f32 = 5.0; // Initial punch velocity scale.
+const KNOCKBACK_DECAY_PER_SECOND: f32 = 0.82; // Exponential knockback decay.
+const POOL_BALL_RESTITUTION: f32 = 0.92; // Pool-ball restitution factor.
 const MIN_STEP_INTERVAL: f32 = 0.001;
 const MAX_STEP_INTERVAL: f32 = 1.0;
 const STEP_INTERVAL_CHANGE: f32 = 0.05;
@@ -42,6 +46,7 @@ const MAX_CATCH_UP_STEPS: usize = 100;
 const COLLISION_COOLDOWN: f32 = 0.75;
 
 impl Hamster {
+    // Creates one entity with a 75-pixel radius and a random initial waypoint.
     fn new(name: impl Into<String>, position: Vec2, velocity: Vec2) -> Self {
         let radius = 75.0;
         Self {
@@ -60,14 +65,17 @@ impl Hamster {
         }
     }
 
+    // Prevents one physical overlap from counting repeatedly on later steps.
     fn update_collision_cooldown(&mut self, delta_time: f32) {
         self.collision_cooldown = (self.collision_cooldown - delta_time).max(0.0);
     }
 
+    // Returns true only while an encounter timer is active.
     fn is_chasing(&self) -> bool {
         self.chase_active && self.chase_remaining > 0.0
     }
 
+    // Counts down Chase/Flee/Pounce encounter time and resets expired behavior.
     fn update_chase(&mut self, delta_time: f32) {
         if self.chase_remaining > 0.0 {
             self.chase_remaining = (self.chase_remaining - delta_time).max(0.0);
@@ -80,6 +88,7 @@ impl Hamster {
         }
     }
 
+    // Applies exponential knockback decay and restores normal movement at rest.
     fn update_knockback(&mut self, delta_time: f32) {
         if self.action != HamsterAction::Knockback {
             return;
@@ -94,6 +103,7 @@ impl Hamster {
         }
     }
 
+    // Smoothly lerps velocity toward a target at the selected behavior speed.
     fn steer_toward(&mut self, target: Vec2, speed: f32, delta_time: f32) {
         let direction = (target - self.entity.position).normalize_or_zero();
         let desired_velocity = direction * speed;
@@ -101,6 +111,7 @@ impl Hamster {
         self.entity.velocity = self.entity.velocity.lerp(desired_velocity, steering);
     }
 
+    // Dispatches movement for Normal, Chase, Pounce, Flee, and Knockback states.
     fn update_movement(
         &mut self,
         target_position: Option<Vec2>,
@@ -156,6 +167,7 @@ impl Hamster {
     }
 }
 
+// Chooses a reachable point inside the window boundaries for normal steering.
 fn random_waypoint(radius: f32) -> Vec2 {
     let max_x = (screen_width() - radius).max(radius);
     let max_y = (screen_height() - radius).max(radius);
@@ -165,6 +177,7 @@ fn random_waypoint(radius: f32) -> Vec2 {
     )
 }
 
+// Converts a velocity vector into a readable direction label.
 fn movement_direction(velocity: Vec2) -> &'static str {
     match (velocity.x.is_sign_negative(), velocity.y.is_sign_negative()) {
         (false, false) => "right and down",
@@ -174,6 +187,7 @@ fn movement_direction(velocity: Vec2) -> &'static str {
     }
 }
 
+// Adds movement and collision-check work to the FIFO queue for all three hamsters.
 fn schedule_frame_tasks(engine: &mut FixedTickEngine<FifoScheduler>, hamsters: &[Hamster; 3]) {
     let tick = engine.current_tick();
     let first_task_id = tick * 6 + 1;
@@ -181,16 +195,12 @@ fn schedule_frame_tasks(engine: &mut FixedTickEngine<FifoScheduler>, hamsters: &
     for hamster_index in 0..3 {
         let task_offset = hamster_index * 2;
         let hamster_index = hamster_index as usize;
-        let activity = if hamsters[hamster_index].is_chasing() {
-            match hamsters[hamster_index].action {
-                HamsterAction::Chase => ("Chase", BehaviorType::Chasing),
-                HamsterAction::Pounce => ("Pounce", BehaviorType::Pouncing),
-                HamsterAction::Flee => ("Flee", BehaviorType::Fleeing),
-                HamsterAction::Knockback => ("Knockback", BehaviorType::CollisionCheck),
-                HamsterAction::Normal => ("Move", BehaviorType::Movement),
-            }
-        } else {
-            ("Move", BehaviorType::Movement)
+        let activity = match hamsters[hamster_index].action {
+            HamsterAction::Chase => ("Chase", BehaviorType::Chasing),
+            HamsterAction::Pounce => ("Pounce", BehaviorType::Pouncing),
+            HamsterAction::Flee => ("Flee", BehaviorType::Fleeing),
+            HamsterAction::Knockback => ("Knockback", BehaviorType::Knockback),
+            HamsterAction::Normal => ("Move", BehaviorType::Movement),
         };
         engine.add_task(Task::new(
             first_task_id + task_offset,
@@ -213,6 +223,7 @@ fn schedule_frame_tasks(engine: &mut FixedTickEngine<FifoScheduler>, hamsters: &
     }
 }
 
+// Maps a scheduled task ID to its human-readable FIFO/HUD label.
 fn task_description(task_id: u64, hamsters: &[Hamster; 3]) -> String {
     let movement_residue = match task_id % 6 {
         1 => Some((0, "Movement")),
@@ -242,33 +253,35 @@ fn task_description(task_id: u64, hamsters: &[Hamster; 3]) -> String {
     }
 }
 
+// Resolves a wall collision and applies restitution to the reflected velocity.
 fn check_collision(entity: &mut Entity) -> bool {
     let mut bounced = false;
 
     if entity.position.x - entity.radius < 0.0 {
         entity.position.x = entity.radius;
-        entity.velocity.x = entity.velocity.x.abs();
+        entity.velocity.x = entity.velocity.x.abs() * POOL_BALL_RESTITUTION;
         bounced = true;
     } else if entity.position.x + entity.radius > screen_width() {
         entity.position.x = screen_width() - entity.radius;
-        entity.velocity.x = -entity.velocity.x.abs();
+        entity.velocity.x = -entity.velocity.x.abs() * POOL_BALL_RESTITUTION;
         bounced = true;
     }
 
     if entity.position.y - entity.radius < 0.0 {
         entity.position.y = entity.radius;
-        entity.velocity.y = entity.velocity.y.abs();
+        entity.velocity.y = entity.velocity.y.abs() * POOL_BALL_RESTITUTION;
         bounced = true;
     } else if entity.position.y + entity.radius > screen_height() {
         entity.position.y = screen_height() - entity.radius;
-        entity.velocity.y = -entity.velocity.y.abs();
+        entity.velocity.y = -entity.velocity.y.abs() * POOL_BALL_RESTITUTION;
         bounced = true;
     }
 
     bounced
 }
 
-fn check_hamster_collisions(hamsters: &mut [Hamster; 3]) -> Vec<(usize, usize)> {
+// Finds hamster overlaps, separates their centers, and resolves pool-ball impulses.
+fn check_collisions(hamsters: &mut [Hamster; 3]) -> Vec<(usize, usize)> {
     let mut collisions = Vec::new();
 
     for first_index in 0..hamsters.len() {
@@ -299,8 +312,20 @@ fn check_hamster_collisions(hamsters: &mut [Hamster; 3]) -> Vec<(usize, usize)> 
 
             let first_normal = hamsters[first_index].entity.velocity.dot(normal);
             let second_normal = hamsters[second_index].entity.velocity.dot(normal);
-            hamsters[first_index].entity.velocity += normal * (second_normal - first_normal);
-            hamsters[second_index].entity.velocity += normal * (first_normal - second_normal);
+            let relative_normal_speed = second_normal - first_normal;
+
+            let first_is_knocked = hamsters[first_index].action == HamsterAction::Knockback;
+            let second_is_knocked = hamsters[second_index].action == HamsterAction::Knockback;
+
+            if first_is_knocked || second_is_knocked {
+                transfer_knockback_by_contact_angle(hamsters, first_index, second_index, normal);
+            }
+
+            if relative_normal_speed < 0.0 {
+                let impulse = -(1.0 + POOL_BALL_RESTITUTION) * relative_normal_speed / 2.0;
+                hamsters[first_index].entity.velocity -= normal * impulse;
+                hamsters[second_index].entity.velocity += normal * impulse;
+            }
 
             hamsters[first_index].collision_cooldown = COLLISION_COOLDOWN;
             hamsters[second_index].collision_cooldown = COLLISION_COOLDOWN;
@@ -313,6 +338,56 @@ fn check_hamster_collisions(hamsters: &mut [Hamster; 3]) -> Vec<(usize, usize)> 
     collisions
 }
 
+// Transfers knockback from a cue hamster to a struck hamster along the contact normal.
+fn transfer_knockback_by_contact_angle(
+    hamsters: &mut [Hamster; 3],
+    first_index: usize,
+    second_index: usize,
+    normal: Vec2,
+) {
+    let (cue_index, struck_index) = if hamsters[first_index].action == HamsterAction::Knockback {
+        (first_index, second_index)
+    } else if hamsters[second_index].action == HamsterAction::Knockback {
+        (second_index, first_index)
+    } else {
+        return;
+    };
+
+    if hamsters[struck_index].action == HamsterAction::Knockback
+        || hamsters[struck_index].knockback_remaining > 0.0
+    {
+        return;
+    }
+
+    let cue_direction = if cue_index == first_index {
+        normal
+    } else {
+        -normal
+    };
+    let cue_velocity = hamsters[cue_index].entity.velocity;
+    let cue_normal_speed = cue_velocity.dot(cue_direction);
+
+    if cue_normal_speed <= 0.0 {
+        return;
+    }
+
+    let tangent = vec2(-cue_direction.y, cue_direction.x);
+    let tangent_speed = cue_velocity.dot(tangent);
+
+    let transferred_speed = cue_normal_speed * POOL_BALL_RESTITUTION;
+    hamsters[struck_index].entity.velocity =
+        cue_direction * transferred_speed + tangent * tangent_speed * 0.5;
+    hamsters[struck_index].action = HamsterAction::Knockback;
+    hamsters[struck_index].knockback_remaining = 1.5;
+    hamsters[struck_index].chase_target = None;
+    hamsters[struck_index].chase_active = false;
+    hamsters[struck_index].chase_remaining = 0.0;
+    hamsters[struck_index].pounce_remaining = 0.0;
+
+    hamsters[cue_index].entity.velocity *= 1.0 - POOL_BALL_RESTITUTION;
+}
+
+// Randomly assigns a prey and either Chase or Pounce behavior after a collision.
 fn start_encounter(hamsters: &mut [Hamster; 3], first: usize, second: usize) {
     if hamsters.iter().any(Hamster::is_chasing) {
         return;
@@ -340,6 +415,7 @@ fn start_encounter(hamsters: &mut [Hamster; 3], first: usize, second: usize) {
     hamsters[predator].chase_remaining = CHASE_DURATION;
 }
 
+// Sends a fleeing hamster linearly away from a Chase/Pounce hunter.
 fn punch_fleeing_hamster(hamsters: &mut [Hamster; 3], hunter: usize, prey: usize) {
     if hamsters[prey].action != HamsterAction::Flee {
         return;
@@ -367,6 +443,7 @@ fn punch_fleeing_hamster(hamsters: &mut [Hamster; 3], hunter: usize, prey: usize
     hamsters[hunter].pounce_remaining = 0.0;
 }
 
+// Finds the position of the nearest other hamster for flee steering.
 fn closest_other_position(hamsters: &[Hamster; 3], index: usize) -> Option<Vec2> {
     hamsters
         .iter()
@@ -386,6 +463,7 @@ fn closest_other_position(hamsters: &[Hamster; 3], index: usize) -> Option<Vec2>
         .map(|(_, hamster)| hamster.entity.position)
 }
 
+// Calculates the rendered square size and draws one hamster texture plus label.
 fn draw_hamster(texture: &Texture2D, hamster: &Hamster) {
     let entity = &hamster.entity;
     let texture_scale = (entity.radius * 2.0) / texture.width().max(texture.height());
@@ -415,6 +493,7 @@ fn draw_hamster(texture: &Texture2D, hamster: &Hamster) {
 
 #[macroquad::main("Task-Scheduled Hamsters")]
 async fn main() {
+    // Loads the shared texture once; all entities scale and render independently.
     let texture = load_texture("examples/hamster.png")
         .await
         .expect("Failed to load hamster image");
@@ -445,6 +524,7 @@ async fn main() {
     let mut previous_time = Instant::now();
 
     loop {
+        // Monotonic elapsed time controls the scheduler accumulator independently of FPS.
         let current_time = Instant::now();
         let delta_time = current_time
             .duration_since(previous_time)
@@ -472,6 +552,7 @@ async fn main() {
         let real_time_mode = step_interval <= MIN_STEP_INTERVAL;
         let mut completed_this_frame = 0;
         if !paused {
+            // Adds real elapsed time to the FIFO step accumulator.
             simulation_timer += delta_time;
             let mut steps = 0;
             while simulation_timer >= step_interval && steps < MAX_CATCH_UP_STEPS {
@@ -497,6 +578,7 @@ async fn main() {
                     };
                     match task_kind {
                         1 | 3 | 5 => {
+                            // One movement task advances the entity by the selected frame slice.
                             let movement_delta = if real_time_mode {
                                 step_interval * 4.0
                             } else {
@@ -536,7 +618,7 @@ async fn main() {
                 for hamster in &mut hamsters {
                     hamster.update_knockback(step_interval);
                 }
-                let collisions = check_hamster_collisions(&mut hamsters);
+                let collisions = check_collisions(&mut hamsters);
                 for (first, second) in collisions {
                     let first_hunter = matches!(
                         hamsters[first].action,
@@ -550,7 +632,9 @@ async fn main() {
                         punch_fleeing_hamster(&mut hamsters, first, second);
                     } else if second_hunter && hamsters[first].action == HamsterAction::Flee {
                         punch_fleeing_hamster(&mut hamsters, second, first);
-                    } else if !hamsters.iter().any(Hamster::is_chasing) {
+                    } else if !hamsters.iter().any(|hamster| {
+                        hamster.action == HamsterAction::Knockback || hamster.is_chasing()
+                    }) {
                         start_encounter(&mut hamsters, first, second);
                     }
                 }
@@ -784,13 +868,13 @@ mod tests {
                 0.0,
             );
 
-        assert_eq!(check_hamster_collisions(&mut hamsters).len(), 1);
+        assert_eq!(check_collisions(&mut hamsters).len(), 1);
         let first_velocity = hamsters[0].entity.velocity;
         let second_velocity = hamsters[1].entity.velocity;
         let first_collisions = hamsters[0].collisions;
         let second_collisions = hamsters[1].collisions;
 
-        assert!(check_hamster_collisions(&mut hamsters).is_empty());
+        assert!(check_collisions(&mut hamsters).is_empty());
         assert_eq!(hamsters[0].entity.velocity, first_velocity);
         assert_eq!(hamsters[1].entity.velocity, second_velocity);
         assert_eq!(hamsters[0].collisions, first_collisions);
@@ -825,5 +909,49 @@ mod tests {
             hamsters[1].entity.velocity.length()
                 >= hamsters[1].normal_speed * PUNCH_SPEED_MULTIPLIER - 1.0
         );
+    }
+
+    #[test]
+    fn knocked_back_hamster_transfers_velocity_to_struck_hamster() {
+        let mut hamsters = hamsters();
+        hamsters[0].action = HamsterAction::Knockback;
+        hamsters[0].entity.velocity = vec2(400.0, 0.0);
+        hamsters[1].entity.position = vec2(240.0, 100.0);
+
+        let _ = check_collisions(&mut hamsters);
+
+        assert_eq!(hamsters[1].action, HamsterAction::Knockback);
+        assert!(hamsters[1].entity.velocity.x > 0.0);
+        assert!(hamsters[1].knockback_remaining > 0.0);
+    }
+
+    #[test]
+    fn glancing_impact_keeps_a_tangent_component() {
+        let mut hamsters = hamsters();
+        hamsters[0].action = HamsterAction::Knockback;
+        hamsters[0].entity.velocity = vec2(400.0, 100.0);
+        hamsters[1].entity.position = vec2(240.0, 145.0);
+
+        let _ = check_collisions(&mut hamsters);
+
+        assert_eq!(hamsters[1].action, HamsterAction::Knockback);
+        assert!(hamsters[1].entity.velocity.y != 0.0);
+    }
+
+    #[test]
+    fn knocked_back_hamster_overrides_pounce_state() {
+        let mut hamsters = hamsters();
+        hamsters[0].action = HamsterAction::Knockback;
+        hamsters[0].entity.velocity = vec2(400.0, 0.0);
+        hamsters[1].action = HamsterAction::Pounce;
+        hamsters[1].pounce_remaining = 0.75;
+        hamsters[1].entity.position = vec2(240.0, 100.0);
+
+        let collisions = check_collisions(&mut hamsters);
+
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(hamsters[1].action, HamsterAction::Knockback);
+        assert_eq!(hamsters[1].pounce_remaining, 0.0);
+        assert!(hamsters[1].knockback_remaining > 0.0);
     }
 }
