@@ -69,11 +69,18 @@ Controls:
 - `Up` decreases the step interval and speeds up task execution.
 - `Down` increases the step interval and slows down task execution.
 - `Space` pauses or resumes the simulation.
+- `A` or the **Add** button adds the next available hamster.
+- `R` or the **Remove** button removes the last added hamster.
+  **Meep** remains the default and is never removed.
 
-The interval ranges from `0.001` seconds to `1.0` seconds. The minimum setting
-is displayed as `REAL-TIME`. The application uses a monotonic clock, limits
+The interval ranges from `0.025` seconds to `1.0` seconds. The fastest
+setting displays as `0.025s`. The application uses a monotonic clock, limits
 catch-up work after a long frame or window operation, and prevents queued task
 backlog from creating an artificial burst.
+
+The sandbox starts with **Meep** only. **Beep** and **Peep** can be added or
+removed through the in-window GUI or keyboard controls. A removed hamster has
+no movement, collision, rendering, or scheduled-task logic while absent.
 
 When the hamsters collide, one is randomly selected as the predator and the
 other becomes the prey. The predator steers toward the prey for five simulated
@@ -100,6 +107,20 @@ Pounce. Pounce pauses for 0.5 to 1.0 seconds, then launches at 3.5 times normal
 speed. When a chase or pounce collision reaches the fleeing hamster, the prey is
 punched into Knockback at 5 times normal speed, bounces linearly off walls and
 objects, decays for each collision and over time, then returns to normal behavior.
+Pounce remains its explicit state after launch until the encounter ends.
+Movement and timers now use a fixed 60 Hz simulation quantum:
+
+- Every fixed step advances a hamster by at most `velocity / 60` seconds of
+  movement, regardless of the selected display interval.
+- Real-time mode consumes elapsed monotonic wall time and advances 60 fixed
+  simulation steps per second. A 0.25-second stall cap prevents window moves
+  and resizing from creating an unrealistic catch-up burst.
+- Macroquad's rendered FPS is shown in the HUD as `FPS:`. A rendered FPS of
+  60 or 144 is a display rate, not a second simulation clock.
+- Slowed modes present FIFO task cycles at the selected interval, while each
+  visible cycle advances only one fixed 1/60-second physics quantum.
+- Pounce setup and launch use the fixed simulation timer, not the movement-task
+  rate.
 
 When a knocked-back hamster strikes another hamster, that struck hamster
 overrides Pounce, Chase, Flee, or Normal behavior and enters Knockback
@@ -117,6 +138,13 @@ The project distinguishes between a simulation tick and a scheduler quantum:
   execute during one tick. The main application uses a budget of one work unit,
   making each FIFO task visible.
 - A task's `simulated_cost` describes how many work units it needs. If the remaining budget is too small, the task must continue during a later tick or be re-queued according to the active policy.
+
+Adding more hamsters adds movement and collision-check tasks to the FIFO queue.
+As task count grows, the fixed scheduler work budget completes a smaller
+portion of the overall activity per frame, so the simulation is expected to
+appear slower even though each movement step advances by the same 1/60-second
+physics quantum. The HUD's run-time state indicator is not used; FIFO tick and
+active-task information are sufficient to show scheduling progress.
 
 The current interactive demonstration focuses on FIFO. The next scheduler
 policies are planned as:

@@ -1,4 +1,4 @@
-// And once the timed version was working, I made a more true-to-life version of the DVD screensaver, having it change colors when it bounces, showcasing event-driven programming.
+﻿// And once the timed version was working, I made a more true-to-life version of the DVD screensaver, having it change colors when it bounces, showcasing event-driven programming.
 
 use macroquad::prelude::*;
 

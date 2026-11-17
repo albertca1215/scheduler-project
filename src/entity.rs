@@ -1,4 +1,4 @@
-use macroquad::prelude::{Color, Vec2};
+﻿use macroquad::prelude::{Color, Vec2};
 
 /// State for one moving object in the simulation.
 #[derive(Debug, Clone, Copy, PartialEq)]
