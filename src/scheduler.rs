@@ -171,12 +171,13 @@ impl Default for SchedulerMetrics {
     }
 }
 
-/// Work completed during one simulation tick.
+/// Scheduling work observed during one simulation tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TickReport {
     pub tick: u64,
     pub work_units: u32,
     pub idle_units: u32,
+    pub selected_task_ids: Vec<u64>,
     pub completed_task_ids: Vec<u64>,
 }
 
@@ -232,12 +233,14 @@ impl<S: Scheduler> FixedTickEngine<S> {
         let tick = self.current_tick;
         let mut budget_remaining = self.tick_budget;
         let mut work_units = 0;
+        let mut selected_task_ids = Vec::new();
         let mut completed_task_ids = Vec::new();
 
         while budget_remaining > 0 {
             let Some(mut task) = self.scheduler.next_task() else {
                 break;
             };
+            selected_task_ids.push(task.id);
             let task_metrics = self
                 .metrics
                 .get_mut(&task.id)
@@ -287,6 +290,7 @@ impl<S: Scheduler> FixedTickEngine<S> {
             tick,
             work_units,
             idle_units: self.tick_budget - work_units,
+            selected_task_ids,
             completed_task_ids,
         }
     }
