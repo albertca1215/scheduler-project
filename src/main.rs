@@ -4,9 +4,16 @@
 use macroquad::prelude::*;
 use scheduler_project::entity::Entity;
 use scheduler_project::scheduler::{
-    BehaviorType, DeadlineType, FifoScheduler, FixedTickEngine, Task,
+    BehaviorType, DeadlineType, FixedTickEngine, SchedulerPolicy, Task,
 };
 use std::time::Instant;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchedulingKind {
+    Fifo,
+    Priority,
+    RoundRobin,
+}
 
 #[derive(Clone)]
 struct Hamster {
@@ -198,8 +205,11 @@ fn movement_direction(velocity: Vec2) -> &'static str {
     }
 }
 
-// Adds movement and collision-check work to the FIFO queue for all three hamsters.
-fn schedule_frame_tasks(engine: &mut FixedTickEngine<FifoScheduler>, hamsters: &[Hamster]) {
+// Adds movement and collision-check work to the active scheduler queue.
+fn schedule_frame_tasks(
+    engine: &mut FixedTickEngine<SchedulerPolicy>,
+    hamsters: &[Hamster],
+) {
     let tick = engine.current_tick();
     let tasks_per_cycle = hamsters.len() as u64 * 2;
     let first_task_id = tick * tasks_per_cycle + 1;
@@ -563,7 +573,8 @@ async fn main() {
         vec2(screen_width() * 0.3, screen_height() * 0.55),
         vec2(180.0, 140.0),
     )];
-    let mut engine = FixedTickEngine::new(FifoScheduler::new(), 1);
+    let mut scheduling_kind = SchedulingKind::Fifo;
+    let mut engine = FixedTickEngine::new(SchedulerPolicy::fifo(), 1);
     let mut simulation_timer = 0.0;
     let mut step_interval = 0.5;
     let mut paused = false;
@@ -600,6 +611,39 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::R) {
             remove_last_hamster(&mut hamsters);
+        }
+        let requested_scheduling_kind = if is_key_pressed(KeyCode::F1) {
+            Some(SchedulingKind::Fifo)
+        } else if is_key_pressed(KeyCode::F2) {
+            Some(SchedulingKind::Priority)
+        } else if is_key_pressed(KeyCode::F3) {
+            Some(SchedulingKind::RoundRobin)
+        } else {
+            None
+        };
+        if let Some(requested) = requested_scheduling_kind {
+            if requested != scheduling_kind {
+                scheduling_kind = requested;
+                engine = match scheduling_kind {
+                    SchedulingKind::Fifo => FixedTickEngine::new(SchedulerPolicy::fifo(), 1),
+                    SchedulingKind::Priority => {
+                        FixedTickEngine::new(SchedulerPolicy::priority(), 1)
+                    }
+                    SchedulingKind::RoundRobin => {
+                        FixedTickEngine::new(SchedulerPolicy::round_robin(10), 1)
+                    }
+                };
+                hamsters = vec![Hamster::new(
+                    "Meep",
+                    vec2(screen_width() * 0.3, screen_height() * 0.55),
+                    vec2(180.0, 140.0),
+                )];
+                simulation_timer = 0.0;
+                step_interval = 0.5;
+                paused = false;
+                active_task = String::from("Waiting for first task");
+                previous_time = Instant::now();
+            }
         }
         let mut completed_this_frame = 0;
         if !paused {
@@ -705,9 +749,15 @@ async fn main() {
         }
 
         clear_background(BLACK);
+        let scheduling_name = match scheduling_kind {
+            SchedulingKind::Fifo => "FIFO",
+            SchedulingKind::Priority => "Priority",
+            SchedulingKind::RoundRobin => "Round Robin",
+        };
         draw_text(
             &format!(
-                "FIFO | Tick: {}  |  Completed this frame: {}  |  Total: {}",
+                "{} | Tick: {}  |  Completed this frame: {}  |  Total: {}",
+                scheduling_name,
                 engine.current_tick(),
                 completed_this_frame,
                 engine.aggregate_metrics().completed_tasks,
@@ -726,7 +776,7 @@ async fn main() {
         );
         draw_text(
             &format!(
-                "Step interval: {:.3}s  |  Up/Down: speed  |  Space: pause/resume  |  A: add  |  R: remove",
+                "Step interval: {:.3}s  |  Up/Down: speed  |  Space: pause/resume  |  A: add  |  R: remove  |  F1: FIFO  |  F2: Priority  |  F3: RR",
                 step_interval,
             ),
             20.0,

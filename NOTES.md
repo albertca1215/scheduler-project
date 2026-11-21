@@ -16,8 +16,8 @@ The initial scheduler model is in `src/scheduler.rs`:
 
 The current deadline value is an absolute tick. A task is overdue when the current tick is greater than its deadline.
 
-The current application uses FIFO scheduling only. Round Robin, Priority, and
-MLFQ policies are not implemented yet.
+The application supports FIFO, Priority, and Round Robin scheduling. MLFQ is
+not implemented yet.
 
 The main application now also includes waypoint-based steering. Hamsters choose
 new random waypoints during normal movement and smoothly turn toward them rather
@@ -25,7 +25,7 @@ than following one fixed straight line.
 
 ## Try it yourself
 
-The scheduler has a human-readable command-line demo. From the project root, run:
+The scheduler has a human-readable command-line demo. A variety of prototypes were worked on in the process of getting accustomed to Macroquad. From the project root, run:
 
 ```powershell
 cargo run --example scheduler_demo
@@ -72,6 +72,13 @@ Controls:
 - `A` or the **Add** button adds the next available hamster.
 - `R` or the **Remove** button removes the last added hamster.
   **Meep** remains the default and is never removed.
+- `F1` switches to FIFO.
+- `F2` switches to Priority.
+- `F3` switches to Round Robin.
+
+Switching scheduling types resets the simulation to one **Meep** hamster,
+zeroes scheduler and simulation counters, restores the default step interval,
+resumes execution, and clears the active-task label.
 
 The interval ranges from `0.025` seconds to `1.0` seconds. The fastest
 setting displays as `0.025s`. The application uses a monotonic clock, limits
@@ -146,16 +153,13 @@ appear slower even though each movement step advances by the same 1/60-second
 physics quantum. The HUD's run-time state indicator is not used; FIFO tick and
 active-task information are sufficient to show scheduling progress.
 
-The current interactive demonstration focuses on FIFO. The next scheduler
-policies are planned as:
+The interactive demonstration supports:
 
 - **Priority:** select the ready task with the highest scheduling precedence.
-  The current design uses lower numeric priority values as the higher
-  precedence.
-- **Round Robin:** run tasks for a fixed quantum, then re-queue unfinished work
-  so that additional activities become visible through repeated context
-  switches. The initial proposed quantum is 10 work units.
-- **MLFQ:** future work after FIFO, Priority, and Round Robin.
+  Lower numeric priority values represent higher precedence.
+- **Round Robin:** re-queue unfinished work and rotate ready tasks so that
+  waiting tasks receive a fair turn. The initial policy quantum is 10 work units.
+- **MLFQ:** future work after the current FIFO, Priority, and Round Robin policies.
 
 ## Metrics
 
