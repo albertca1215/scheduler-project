@@ -1,162 +1,84 @@
 use scheduler_project::scheduler::{
-    BehaviorType, DeadlineType, FifoScheduler, FixedTickEngine, PriorityScheduler,
-    RoundRobinScheduler, Scheduler, Task,
+    BehaviorType, DeadlineType, FifoScheduler, FixedTickEngine, Task,
 };
-use std::collections::BTreeMap;
 
-const TICK_BUDGET: u32 = 4;
-const ROUND_ROBIN_QUANTUM: u32 = 2;
-
-fn encounter_tasks() -> Vec<Task> {
-    vec![
+fn main() {
+    let tasks = [
         Task::new(
             1,
-            "Move Meep",
+            "Wall collision",
             10,
-            8,
-            DeadlineType::Hard,
-            6,
-            BehaviorType::Movement,
-        ),
-        Task::new(
             2,
-            "Check Meep collision",
+            DeadlineType::Hard,
             1,
-            3,
-            DeadlineType::Hard,
-            2,
             BehaviorType::CollisionCheck,
         ),
         Task::new(
-            3,
-            "Chase Beep",
-            4,
-            8,
-            DeadlineType::Soft,
-            4,
-            BehaviorType::Chasing,
-        ),
-        Task::new(
-            4,
-            "Flee Peep",
-            5,
-            8,
-            DeadlineType::Soft,
-            4,
-            BehaviorType::Fleeing,
-        ),
-        Task::new(
-            5,
-            "Pounce Beep",
-            3,
-            6,
-            DeadlineType::EventDriven,
-            3,
-            BehaviorType::Pouncing,
-        ),
-        Task::new(
-            6,
-            "Knockback Peep",
             2,
-            6,
-            DeadlineType::Hard,
-            3,
-            BehaviorType::Knockback,
+            "Move hamster",
+            5,
+            5,
+            DeadlineType::Soft,
+            2,
+            BehaviorType::Movement,
         ),
-    ]
-}
+        Task::new(
+            3,
+            "Change color",
+            1,
+            10,
+            DeadlineType::EventDriven,
+            1,
+            BehaviorType::CollisionColorChange,
+        ),
+    ];
 
-fn task_names(tasks: &[Task]) -> BTreeMap<u64, &str> {
-    tasks
-        .iter()
-        .map(|task| (task.id, task.name.as_str()))
-        .collect()
-}
+    let scheduler = FifoScheduler::new();
+    let mut engine = FixedTickEngine::new(scheduler, 2);
+    let task_count = tasks.len() as u64;
 
-fn describe_ids(ids: &[u64], names: &BTreeMap<u64, &str>) -> String {
-    if ids.is_empty() {
-        return "none".to_string();
-    }
-
-    ids.iter()
-        .map(|id| names.get(id).copied().unwrap_or("unknown task"))
-        .collect::<Vec<_>>()
-        .join(" -> ")
-}
-
-fn run_experiment<S: Scheduler>(label: &str, scheduler: S, tasks: &[Task]) {
-    let names = task_names(tasks);
-    let mut engine = FixedTickEngine::new(scheduler, TICK_BUDGET);
-
+    println!("Scheduler demo: FIFO (tick budget: 2 work units)");
+    println!("Adding tasks:");
     for task in tasks {
-        engine.add_task(task.clone());
+        println!(
+            "  [{}] {} (priority {}, deadline tick {}, cost {})",
+            task.id, task.name, task.priority, task.deadline, task.simulated_cost
+        );
+        engine.add_task(task);
     }
 
-    println!("\n=== {label} ===");
-    println!(
-        "tick budget: {TICK_BUDGET} work units{}",
-        if label == "Round Robin" {
-            format!(", quantum: {ROUND_ROBIN_QUANTUM}")
-        } else {
-            String::new()
-        }
-    );
-    println!("Tick trace:");
-
-    while engine.pending_tasks() > 0 {
+    println!("\nTick execution:");
+    while engine.aggregate_metrics().completed_tasks < task_count {
         let report = engine.run_tick();
         println!(
-            "  t{:>2}: work {}/{} | selected: {} | completed: {} | queued: {}",
+            "  Tick {}: {} work, {} idle{}",
             report.tick,
             report.work_units,
-            TICK_BUDGET,
-            describe_ids(&report.selected_task_ids, &names),
-            describe_ids(&report.completed_task_ids, &names),
-            engine.pending_tasks(),
+            report.idle_units,
+            if report.completed_task_ids.is_empty() {
+                String::new()
+            } else {
+                format!("; completed {:?}", report.completed_task_ids)
+            }
         );
     }
 
-    println!("Task metrics:");
-    for task in tasks {
-        let metrics = &engine.task_metrics()[&task.id];
+    println!("\nTask metrics:");
+    for (task_id, metrics) in engine.task_metrics() {
         println!(
-            "  {:<20} response {:>2?} | waiting {:>2?} | turnaround {:>2?} | missed {}",
-            task.name,
+            "  Task {}: response {:?}, waiting {:?}, turnaround {:?}, deadline missed {}",
+            task_id,
             metrics.response_time(),
             metrics.waiting_time(),
             metrics.turnaround_time(),
-            metrics.deadline_missed,
+            metrics.deadline_missed
         );
     }
 
     let aggregate = engine.aggregate_metrics();
     println!(
-        "Aggregate: {} ticks | throughput {:.2} tasks/tick | CPU utilization {:.0}%",
-        aggregate.elapsed_ticks,
+        "\nAggregate: throughput {:.2} tasks/tick, CPU utilization {:.0}%",
         aggregate.throughput(),
-        aggregate.cpu_utilization() * 100.0,
-    );
-}
-
-fn main() {
-    let tasks = encounter_tasks();
-
-    println!("Scheduler comparison: deterministic hamster encounter");
-    println!("The same ready-task queue is run through every policy.");
-    println!("Lower numeric priority values represent higher precedence.\n");
-    println!("Workload:");
-    for task in &tasks {
-        println!(
-            "  [{}] {:<20} priority {:>2} | deadline {:>2} | cost {}",
-            task.id, task.name, task.priority, task.deadline, task.simulated_cost
-        );
-    }
-
-    run_experiment("FIFO", FifoScheduler::new(), &tasks);
-    run_experiment("Priority", PriorityScheduler::new(), &tasks);
-    run_experiment(
-        "Round Robin",
-        RoundRobinScheduler::new(ROUND_ROBIN_QUANTUM),
-        &tasks,
+        aggregate.cpu_utilization() * 100.0
     );
 }

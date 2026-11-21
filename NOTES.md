@@ -25,18 +25,16 @@ than following one fixed straight line.
 
 ## Try it yourself
 
-The scheduler has a human-readable command-line comparison demo. A variety of prototypes were worked on in the process of getting accustomed to Macroquad. From the project root, run:
+The scheduler has a human-readable command-line demo. A variety of prototypes were worked on in the process of getting accustomed to Macroquad. From the project root, run:
 
 ```powershell
 cargo run --example scheduler_demo
 ```
 
-It adds a deterministic hamster-encounter workload and runs the same tasks
-through FIFO, Priority, and Round Robin. The output shows each policy's
-per-tick selection order, completed work, queue depth, per-task timing metrics,
-and aggregate throughput/utilization. The simulated costs, priorities, and
-deadlines are defined in `examples/scheduler_demo.rs` so the workload can be
-modified for additional experiments.
+It adds three tasks, prints their metadata, and shows the order in which FIFO
+runs them. The simulated cost advances the displayed tick, so you can edit
+the task costs or deadlines in `examples/scheduler_demo.rs` and immediately
+see how the results change.
 
 To run the automated checks instead:
 
@@ -61,9 +59,10 @@ collision:
 cargo run
 ```
 
-The main application uses a four-unit scheduler budget per simulation step.
-The HUD shows the active task, scheduler tick, budget, completed-task totals,
-each hamster's direction and velocity, and its collision count.
+The main application runs one scheduler work unit per simulation step so FIFO
+context switches are visible. The HUD shows the active task, scheduler tick,
+completed-task totals, each hamster's direction and velocity, and its collision
+count.
 
 Controls:
 
@@ -76,13 +75,10 @@ Controls:
 - `F1` switches to FIFO.
 - `F2` switches to Priority.
 - `F3` switches to Round Robin.
-- `Q`/`E` decrease/increase the scheduler tick budget from 1 to 16.
-- `Z`/`X` decrease/increase the Round Robin quantum from 1 to 8.
 
-Changing the scheduling type, tick budget, or Round Robin quantum resets the
-simulation to one **Meep** hamster, zeroes scheduler and simulation counters,
-restores the default step interval, resumes execution, and clears the
-active-task label.
+Switching scheduling types resets the simulation to one **Meep** hamster,
+zeroes scheduler and simulation counters, restores the default step interval,
+resumes execution, and clears the active-task label.
 
 The interval ranges from `0.025` seconds to `1.0` seconds. The fastest
 setting displays as `0.025s`. The application uses a monotonic clock, limits
@@ -146,24 +142,23 @@ The project distinguishes between a simulation tick and a scheduler quantum:
 - A **simulation tick** is one call to `FixedTickEngine::run_tick`. It selects
   ready work and advances scheduler metrics.
 - A **scheduler quantum** is the amount of simulated work the scheduler may
-  execute during one tick. The main application uses a budget of four work
-  units. Normal movement and collision checks cost one unit, while chase,
-  flee, pounce, and knockback actions cost two or three units.
+  execute during one tick. The main application uses a budget of one work unit,
+  making each FIFO task visible.
 - A task's `simulated_cost` describes how many work units it needs. If the remaining budget is too small, the task must continue during a later tick or be re-queued according to the active policy.
 
-Adding more hamsters adds movement and collision-check tasks to the scheduler
-queue. As task count grows, the fixed four-unit scheduler budget completes a
-smaller portion of the overall activity per frame, so the simulation is
-expected to appear slower even though each completed movement step advances by
-the same 1/60-second physics quantum. The HUD displays the active policy,
-budget, and scheduler log so the work distribution remains observable.
+Adding more hamsters adds movement and collision-check tasks to the FIFO queue.
+As task count grows, the fixed scheduler work budget completes a smaller
+portion of the overall activity per frame, so the simulation is expected to
+appear slower even though each movement step advances by the same 1/60-second
+physics quantum. The HUD's run-time state indicator is not used; FIFO tick and
+active-task information are sufficient to show scheduling progress.
 
 The interactive demonstration supports:
 
 - **Priority:** select the ready task with the highest scheduling precedence.
   Lower numeric priority values represent higher precedence.
 - **Round Robin:** re-queue unfinished work and rotate ready tasks so that
-  waiting tasks receive a fair turn. The initial policy quantum is 2 work units.
+  waiting tasks receive a fair turn. The initial policy quantum is 10 work units.
 - **MLFQ:** future work after the current FIFO, Priority, and Round Robin policies.
 
 ## Metrics
