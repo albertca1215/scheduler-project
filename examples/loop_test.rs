@@ -1,4 +1,4 @@
-// A simple loop test using Macroquad. This was my first time getting my feet wet with the basics of simulation in Rust, starting with a rectangle moving across the screen.
+﻿// A simple loop test using Macroquad. This was my first time getting my feet wet with the basics of simulation in Rust, starting with a rectangle moving across the screen.
 
 use macroquad::prelude::*;
 

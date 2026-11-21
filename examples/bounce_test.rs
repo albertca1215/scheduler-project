@@ -1,4 +1,4 @@
-// A simple bounce test using Macroquad. Here, I learned how to implement basic physics in a 2D environment by making a ball bounce off the edges of the screen.
+﻿// A simple bounce test using Macroquad. Here, I learned how to implement basic physics in a 2D environment by making a ball bounce off the edges of the screen.
 
 use macroquad::prelude::*;
 

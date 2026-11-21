@@ -1,4 +1,4 @@
-// Once bounce_test was completed, I decided to create a more advanced version, using the iconic DVD logo and having it change colors over time, showcasing timed events.
+﻿// Once bounce_test was completed, I decided to create a more advanced version, using the iconic DVD logo and having it change colors over time, showcasing timed events.
 
 use macroquad::prelude::*;
 

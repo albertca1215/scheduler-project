@@ -16,6 +16,9 @@ pub enum DeadlineType {
 pub enum BehaviorType {
     Movement,
     Chasing,
+    Fleeing,
+    Pouncing,
+    Knockback,
     CollisionCheck,
     PeriodicColorChange,
     CollisionColorChange,
@@ -337,6 +340,161 @@ impl Scheduler for FifoScheduler {
     }
 }
 
+/// Priority scheduler that selects the lowest numeric priority value first.
+#[derive(Debug, Default)]
+pub struct PriorityScheduler {
+    queues: BTreeMap<u32, VecDeque<Task>>,
+}
+
+impl PriorityScheduler {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Scheduler for PriorityScheduler {
+    fn add_task(&mut self, task: Task) {
+        self.queues.entry(task.priority).or_default().push_back(task);
+    }
+
+    fn next_task(&mut self) -> Option<Task> {
+        let mut selected_priority = None;
+        for (priority, queue) in &mut self.queues {
+            if !queue.is_empty() {
+                selected_priority = Some(*priority);
+                break;
+            }
+        }
+
+        let priority = selected_priority?;
+        let task = self.queues.get_mut(&priority)?.pop_front();
+        if self.queues.get(&priority).is_some_and(VecDeque::is_empty) {
+            self.queues.remove(&priority);
+        }
+        task
+    }
+
+    fn pending_tasks(&self) -> usize {
+        self.queues.values().map(VecDeque::len).sum()
+    }
+
+    fn name(&self) -> &'static str {
+        "Priority"
+    }
+}
+
+/// Round Robin scheduler that rotates unfinished tasks to the back of the queue.
+#[derive(Debug)]
+pub struct RoundRobinScheduler {
+    queue: VecDeque<Task>,
+    quantum: u32,
+}
+
+impl RoundRobinScheduler {
+    #[must_use]
+    pub fn new(quantum: u32) -> Self {
+        assert!(quantum > 0, "Round Robin quantum must be greater than zero");
+        Self {
+            queue: VecDeque::new(),
+            quantum,
+        }
+    }
+
+    #[must_use]
+    pub fn quantum(&self) -> u32 {
+        self.quantum
+    }
+}
+
+impl Scheduler for RoundRobinScheduler {
+    fn add_task(&mut self, task: Task) {
+        self.queue.push_back(task);
+    }
+
+    fn next_task(&mut self) -> Option<Task> {
+        self.queue.pop_front()
+    }
+
+    fn pending_tasks(&self) -> usize {
+        self.queue.len()
+    }
+
+    fn name(&self) -> &'static str {
+        "Round Robin"
+    }
+
+    fn requeue_task(&mut self, task: Task) {
+        self.queue.push_back(task);
+    }
+}
+
+#[derive(Debug)]
+pub enum SchedulerPolicy {
+    Fifo(FifoScheduler),
+    Priority(PriorityScheduler),
+    RoundRobin(RoundRobinScheduler),
+}
+
+impl SchedulerPolicy {
+    #[must_use]
+    pub fn fifo() -> Self {
+        Self::Fifo(FifoScheduler::new())
+    }
+
+    #[must_use]
+    pub fn priority() -> Self {
+        Self::Priority(PriorityScheduler::new())
+    }
+
+    #[must_use]
+    pub fn round_robin(quantum: u32) -> Self {
+        Self::RoundRobin(RoundRobinScheduler::new(quantum))
+    }
+}
+
+impl Scheduler for SchedulerPolicy {
+    fn add_task(&mut self, task: Task) {
+        match self {
+            Self::Fifo(scheduler) => scheduler.add_task(task),
+            Self::Priority(scheduler) => scheduler.add_task(task),
+            Self::RoundRobin(scheduler) => scheduler.add_task(task),
+        }
+    }
+
+    fn next_task(&mut self) -> Option<Task> {
+        match self {
+            Self::Fifo(scheduler) => scheduler.next_task(),
+            Self::Priority(scheduler) => scheduler.next_task(),
+            Self::RoundRobin(scheduler) => scheduler.next_task(),
+        }
+    }
+
+    fn pending_tasks(&self) -> usize {
+        match self {
+            Self::Fifo(scheduler) => scheduler.pending_tasks(),
+            Self::Priority(scheduler) => scheduler.pending_tasks(),
+            Self::RoundRobin(scheduler) => scheduler.pending_tasks(),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Fifo(scheduler) => scheduler.name(),
+            Self::Priority(scheduler) => scheduler.name(),
+            Self::RoundRobin(scheduler) => scheduler.name(),
+        }
+    }
+
+    fn requeue_task(&mut self, task: Task) {
+        match self {
+            Self::Fifo(scheduler) => scheduler.requeue_task(task),
+            Self::Priority(scheduler) => scheduler.requeue_task(task),
+            Self::RoundRobin(scheduler) => scheduler.requeue_task(task),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +551,35 @@ mod tests {
         let unfinished = scheduler.next_task().expect("task should be ready");
         scheduler.requeue_task(unfinished);
 
+        assert_eq!(scheduler.next_task().map(|task| task.id), Some(1));
+    }
+
+    #[test]
+    fn priority_returns_lowest_numeric_priority_first() {
+        let mut scheduler = PriorityScheduler::new();
+        let mut low_priority = task(1);
+        low_priority.priority = 20;
+        let mut high_priority = task(2);
+        high_priority.priority = 5;
+        scheduler.add_task(low_priority);
+        scheduler.add_task(high_priority);
+
+        assert_eq!(scheduler.name(), "Priority");
+        assert_eq!(scheduler.next_task().map(|task| task.id), Some(2));
+        assert_eq!(scheduler.next_task().map(|task| task.id), Some(1));
+    }
+
+    #[test]
+    fn round_robin_requeues_unfinished_tasks_to_the_back() {
+        let mut scheduler = RoundRobinScheduler::new(10);
+        scheduler.add_task(task(1));
+        scheduler.add_task(task(2));
+
+        let unfinished = scheduler.next_task().expect("first task should be ready");
+        assert_eq!(unfinished.id, 1);
+        scheduler.requeue_task(unfinished);
+
+        assert_eq!(scheduler.next_task().map(|task| task.id), Some(2));
         assert_eq!(scheduler.next_task().map(|task| task.id), Some(1));
     }
 
