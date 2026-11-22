@@ -54,7 +54,7 @@ const STEP_INTERVAL_CHANGE: f32 = 0.05;
 const MAX_CATCH_UP_STEPS: usize = 100;
 const COLLISION_COOLDOWN: f32 = 0.75;
 const FIXED_SIMULATION_STEP: f32 = 1.0 / 60.0;
-const MAX_SCHEDULER_LOG_ENTRIES: usize = 8;
+const MAX_SCHEDULER_LOG_ENTRIES: usize = 6;
 const HUD_HEIGHT: f32 = 240.0;
 const DEFAULT_TICK_BUDGET: u32 = 4;
 const DEFAULT_ROUND_ROBIN_QUANTUM: u32 = 2;
@@ -1002,20 +1002,35 @@ async fn main() {
                 log_x,
                 log_y,
                 right_width - 16.0,
-                12.0,
-                15.0,
+                14.0,
+                17.0,
                 LIGHTGRAY,
             );
         }
         let reference_y = HUD_HEIGHT - 42.0;
-        draw_text("Action costs / priorities:", log_x, reference_y, 14.0, GOLD);
+        let reference_gap = 12.0;
+        let reference_width =
+            ((right_width - 16.0 - reference_gap) * 0.5).max(70.0);
+        let priority_x = log_x + reference_width + reference_gap;
+
+        draw_text("Action costs:", log_x, reference_y, 16.0, GOLD);
         draw_wrapped_text(
-            "Move cost 1/P10 | Collision cost 1/P1 | Chase/Flee cost 2/P4-P5 | Pounce/Knockback cost 3/P3-P2",
+            "Move 1 | Collision 1 | Chase 2 | Flee 2 | Pounce 3 | Knockback 3",
             log_x,
             reference_y + 16.0,
-            right_width - 16.0,
-            12.0,
+            reference_width,
             14.0,
+            16.0,
+            LIGHTGRAY,
+        );
+        draw_text("Priorities:", priority_x, reference_y, 16.0, GOLD);
+        draw_wrapped_text(
+            "Collision 1 | Knockback 2 | Pounce 3 | Chase 4 | Flee 5 | Move 10",
+            priority_x,
+            reference_y + 16.0,
+            reference_width,
+            14.0,
+            16.0,
             LIGHTGRAY,
         );
 
