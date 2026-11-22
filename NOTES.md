@@ -29,14 +29,21 @@ The scheduler has a human-readable command-line comparison demo. A variety of pr
 
 ```powershell
 cargo run --example scheduler_demo
+cargo run --example scheduler_demo -- interactive
+cargo run --example scheduler_demo -- fifo 4
+cargo run --example scheduler_demo -- priority 4
+cargo run --example scheduler_demo -- rr 4 2
 ```
 
-It adds a deterministic hamster-encounter workload and runs the same tasks
-through FIFO, Priority, and Round Robin. The output shows each policy's
-per-tick selection order, completed work, queue depth, per-task timing metrics,
-and aggregate throughput/utilization. The simulated costs, priorities, and
-deadlines are defined in `examples/scheduler_demo.rs` so the workload can be
-modified for additional experiments.
+Running with no arguments performs a deterministic three-policy comparison using
+a budget of four work units and an RR quantum of two. `interactive` opens a
+text-based prompt for policy, budget, and, for Round Robin, quantum. Direct
+policy commands provide reproducible one-policy runs for screenshots and tables.
+
+The demo uses the same shared hamster-encounter workload for FIFO, Priority,
+and Round Robin. It records tasks started, completed, and left incomplete in
+each tick, along with queue depth and per-task timing metrics. It also prints
+aggregate throughput and CPU utilization.
 
 To run the automated checks instead:
 
