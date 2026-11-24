@@ -109,9 +109,13 @@ seconds. The prey continues waypoint movement, and both hamsters move at 1.5
 times their normal speed until the chase ends. The fleeing hamster continues
 waypoint movement at twice its normal speed. The HUD identifies chasing and
 fleeing states and shows the remaining chase time. An active chase is not
-restarted by repeated collisions. Hamster-to-hamster collision overlap is
-separated once and guarded by a 0.75-second cooldown so that repeated contacts
-do not produce infinite velocity swaps or attach the hamsters together.
+restarted by repeated collisions. A 0.75-second cooldown per hamster pair
+prevents repeated collision events and encounter triggers, without blocking
+either hamster from colliding with a third. Overlaps are still separated and
+approaching hamsters bounce during the cooldown. This is to prevent a pair of
+hamsters from infinitely bumping into one another and restarting a chase
+sequence ad infiniutm, as entertaining as it might be to watch a Beyblade-style
+match between hamsters.
 
 Knockback impacts now use an equal-mass pool-ball impulse model. The vector
 between two overlapping hamsters is the contact normal. Incoming velocity is
