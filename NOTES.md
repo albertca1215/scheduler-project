@@ -155,16 +155,16 @@ The project distinguishes between a simulation tick and a scheduler quantum:
 
 - A **simulation tick** is one call to `FixedTickEngine::run_tick`. It selects
   ready work and advances scheduler metrics.
-- A **scheduler quantum** is the amount of simulated work the scheduler may
-  execute during one tick. The main application uses a budget of four work
-  units. Normal movement and collision checks cost one unit, while chase,
-  flee, pounce, and knockback actions cost two or three units.
+- The **tick budget** limits the total work in one tick. The main application
+  defaults to four work units. The **Round Robin quantum** limits work per
+  selection, and a task can be selected again during the same tick. Normal
+  movement and collision checks cost one unit, while chase, flee, pounce, and
+  knockback actions cost two or three units.
 - A task's `simulated_cost` describes how many work units it needs. If the remaining budget is too small, the task must continue during a later tick or be re-queued according to the active policy.
 - Priority scheduling uses these numeric precedence values, where lower values
   run first: collision check `1`, knockback `2`, pounce `3`, chase `4`, flee
-  `5`, and normal movement `10`. FIFO ignores priorities. Round Robin rotates
-  unfinished work according to its quantum, with priorities determining initial
-  order for that policy.
+  `5`, and normal movement `10`. FIFO and Round Robin ignore priorities;
+  Round Robin rotates unfinished work according to its quantum.
 
 ## Scheduling behavior and starvation
 
@@ -173,20 +173,21 @@ one cycle containing movement or encounter work and collision checks for all
 active hamsters. It does not create a fresh cycle until all tasks from the
 existing cycle leave the scheduler queue.
 
-This makes cycle replenishment effectively non-preemptive: an existing cycle
-drains before newly collected behavior can enter the queue. It does not mean
+This is batch-based replenishment: an existing cycle drains before newly
+collected behavior can enter the queue. It does not mean
 that a single task always runs to completion within one scheduler tick.
 `remaining_cost` allows a task to receive only part of its work during a tick,
 then preserve the unfinished work for a later tick.
 
-A task may be suspended between ticks because of:
+A task may be suspended because of:
 
-- the fixed tick budget;
-- a Round Robin time quantum;
-- insufficient budget remaining for the task's full cost.
+- insufficient budget remaining for the task's full cost, deferring it to a
+  later tick;
+- a Round Robin quantum, which can rotate it behind other ready tasks even
+  within the same tick.
 
-The process is therefore best described as **non-preemptive task-cycle
-collection with time-sliced execution of individual tasks**. Priority selection
+The process is therefore best described as **batch-based task-cycle
+collection with simulated time-sliced execution**. Priority selection
 and Round Robin rotation occur within a cycle, but neither policy adds a new
 cycle until the current cycle is empty.
 
@@ -222,6 +223,11 @@ The scheduler model includes `TaskMetrics` for per-task measurements:
 - **Turnaround time:** completion tick minus release tick.
 - **Response time:** first-run tick minus release tick.
 - **Deadline miss:** recorded when a task is not completed by its deadline.
+
+Known limitation: service is currently counted once per selection rather than
+once per distinct tick. If a task is selected multiple times in one tick,
+waiting times can be incorrect or underflow in debug builds (for example,
+`cargo run --example scheduler_demo -- rr 8 1`).
 
 `SchedulerMetrics` stores experiment-wide elapsed ticks, busy ticks, and completed tasks. It derives:
 
