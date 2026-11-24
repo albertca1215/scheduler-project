@@ -171,12 +171,13 @@ impl Default for SchedulerMetrics {
     }
 }
 
-/// Work completed during one simulation tick.
+/// Scheduling work observed during one simulation tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TickReport {
     pub tick: u64,
     pub work_units: u32,
     pub idle_units: u32,
+    pub selected_task_ids: Vec<u64>,
     pub completed_task_ids: Vec<u64>,
 }
 
@@ -232,12 +233,14 @@ impl<S: Scheduler> FixedTickEngine<S> {
         let tick = self.current_tick;
         let mut budget_remaining = self.tick_budget;
         let mut work_units = 0;
+        let mut selected_task_ids = Vec::new();
         let mut completed_task_ids = Vec::new();
 
         while budget_remaining > 0 {
             let Some(mut task) = self.scheduler.next_task() else {
                 break;
             };
+            selected_task_ids.push(task.id);
             let task_metrics = self
                 .metrics
                 .get_mut(&task.id)
@@ -255,7 +258,10 @@ impl<S: Scheduler> FixedTickEngine<S> {
                 continue;
             }
 
-            let work = task.remaining_cost.min(budget_remaining);
+            let work = task
+                .remaining_cost
+                .min(budget_remaining)
+                .min(self.scheduler.quantum());
             task.remaining_cost -= work;
             budget_remaining -= work;
             work_units += work;
@@ -284,6 +290,7 @@ impl<S: Scheduler> FixedTickEngine<S> {
             tick,
             work_units,
             idle_units: self.tick_budget - work_units,
+            selected_task_ids,
             completed_task_ids,
         }
     }
@@ -302,6 +309,11 @@ pub trait Scheduler {
 
     /// Returns the scheduler's display name.
     fn name(&self) -> &'static str;
+
+    /// Returns the maximum amount of work one selected task may receive.
+    fn quantum(&self) -> u32 {
+        u32::MAX
+    }
 
     /// Requeues a task that was not completed during its time slice.
     fn requeue_task(&mut self, task: Task) {
@@ -424,6 +436,10 @@ impl Scheduler for RoundRobinScheduler {
         "Round Robin"
     }
 
+    fn quantum(&self) -> u32 {
+        self.quantum
+    }
+
     fn requeue_task(&mut self, task: Task) {
         self.queue.push_back(task);
     }
@@ -491,6 +507,14 @@ impl Scheduler for SchedulerPolicy {
             Self::Fifo(scheduler) => scheduler.requeue_task(task),
             Self::Priority(scheduler) => scheduler.requeue_task(task),
             Self::RoundRobin(scheduler) => scheduler.requeue_task(task),
+        }
+    }
+
+    fn quantum(&self) -> u32 {
+        match self {
+            Self::Fifo(scheduler) => scheduler.quantum(),
+            Self::Priority(scheduler) => scheduler.quantum(),
+            Self::RoundRobin(scheduler) => scheduler.quantum(),
         }
     }
 }
@@ -581,6 +605,37 @@ mod tests {
 
         assert_eq!(scheduler.next_task().map(|task| task.id), Some(2));
         assert_eq!(scheduler.next_task().map(|task| task.id), Some(1));
+    }
+
+    #[test]
+    fn round_robin_quantum_limits_work_before_requeueing() {
+        let mut engine = FixedTickEngine::new(RoundRobinScheduler::new(2), 5);
+        engine.add_task(Task::new(
+            1,
+            "long task",
+            1,
+            10,
+            DeadlineType::Soft,
+            5,
+            BehaviorType::Movement,
+        ));
+        engine.add_task(Task::new(
+            2,
+            "short task",
+            1,
+            10,
+            DeadlineType::Soft,
+            1,
+            BehaviorType::Movement,
+        ));
+
+        let report = engine.run_tick();
+
+        assert_eq!(report.work_units, 5);
+        assert_eq!(report.completed_task_ids, vec![2]);
+        assert_eq!(engine.pending_tasks(), 1);
+        assert_eq!(engine.task_metrics()[&1].service_ticks, 2);
+        assert_eq!(engine.task_metrics()[&2].completion_tick, Some(1));
     }
 
     #[test]

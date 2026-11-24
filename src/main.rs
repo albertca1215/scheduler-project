@@ -6,6 +6,7 @@ use scheduler_project::entity::Entity;
 use scheduler_project::scheduler::{
     BehaviorType, DeadlineType, FixedTickEngine, SchedulerPolicy, Task,
 };
+use std::collections::VecDeque;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,14 @@ const STEP_INTERVAL_CHANGE: f32 = 0.05;
 const MAX_CATCH_UP_STEPS: usize = 100;
 const COLLISION_COOLDOWN: f32 = 0.75;
 const FIXED_SIMULATION_STEP: f32 = 1.0 / 60.0;
+const MAX_SCHEDULER_LOG_ENTRIES: usize = 6;
+const HUD_HEIGHT: f32 = 240.0;
+const DEFAULT_TICK_BUDGET: u32 = 4;
+const DEFAULT_ROUND_ROBIN_QUANTUM: u32 = 2;
+const MIN_TICK_BUDGET: u32 = 1;
+const MAX_TICK_BUDGET: u32 = 16;
+const MIN_ROUND_ROBIN_QUANTUM: u32 = 1;
+const MAX_ROUND_ROBIN_QUANTUM: u32 = 8;
 
 impl Hamster {
     // Creates one entity with a 75-pixel radius and a random initial waypoint.
@@ -188,10 +197,21 @@ impl Hamster {
 // Chooses a reachable point inside the window boundaries for normal steering.
 fn random_waypoint(radius: f32) -> Vec2 {
     let max_x = (screen_width() - radius).max(radius);
-    let max_y = (screen_height() - radius).max(radius);
+    let min_y = HUD_HEIGHT + radius;
+    let max_y = (screen_height() - radius).max(min_y);
     vec2(
         rand::gen_range(radius, max_x),
-        rand::gen_range(radius, max_y),
+        rand::gen_range(min_y, max_y),
+    )
+}
+
+fn sandbox_position(horizontal: f32, vertical: f32) -> Vec2 {
+    let radius = 75.0;
+    let top = HUD_HEIGHT + radius;
+    let bottom = (screen_height() - radius).max(top);
+    vec2(
+        screen_width() * horizontal,
+        top + (bottom - top) * vertical,
     )
 }
 
@@ -218,25 +238,25 @@ fn schedule_frame_tasks(
         let task_offset = (hamster_index * 2) as u64;
         let hamster_index = hamster_index as usize;
         let activity = match hamsters[hamster_index].action {
-            HamsterAction::Chase => ("Chase", BehaviorType::Chasing),
-            HamsterAction::Pounce => ("Pounce", BehaviorType::Pouncing),
-            HamsterAction::Flee => ("Flee", BehaviorType::Fleeing),
-            HamsterAction::Knockback => ("Knockback", BehaviorType::Knockback),
-            HamsterAction::Normal => ("Move", BehaviorType::Movement),
+            HamsterAction::Chase => ("Chase", BehaviorType::Chasing, 4, 2),
+            HamsterAction::Pounce => ("Pounce", BehaviorType::Pouncing, 3, 3),
+            HamsterAction::Flee => ("Flee", BehaviorType::Fleeing, 5, 2),
+            HamsterAction::Knockback => ("Knockback", BehaviorType::Knockback, 2, 3),
+            HamsterAction::Normal => ("Move", BehaviorType::Movement, 10, 1),
         };
         engine.add_task(Task::new(
             first_task_id + task_offset,
             format!("{} {}", activity.0, hamsters[hamster_index].name),
-            10,
+            activity.2,
             tick + 1,
             DeadlineType::Hard,
-            1,
+            activity.3,
             activity.1,
         ));
         engine.add_task(Task::new(
             first_task_id + task_offset + 1,
             format!("Check {} collision", hamsters[hamster_index].name),
-            9,
+            1,
             tick + 1,
             DeadlineType::Hard,
             1,
@@ -279,6 +299,96 @@ fn task_description(task_id: u64, hamsters: &[Hamster]) -> String {
     "Unknown task".to_string()
 }
 
+fn append_scheduler_log(
+    scheduler_log: &mut VecDeque<String>,
+    report: &scheduler_project::scheduler::TickReport,
+    pending_tasks: usize,
+    hamsters: &[Hamster],
+) -> String {
+    let started = report
+        .selected_task_ids
+        .iter()
+        .map(|task_id| task_description(*task_id, hamsters))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let completed = report
+        .completed_task_ids
+        .iter()
+        .map(|task_id| task_description(*task_id, hamsters))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let incomplete = report
+        .selected_task_ids
+        .iter()
+        .filter(|task_id| !report.completed_task_ids.contains(task_id))
+        .map(|task_id| task_description(*task_id, hamsters))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let started = if started.is_empty() { "none" } else { &started };
+    let completed = if completed.is_empty() {
+        "none"
+    } else {
+        &completed
+    };
+    let incomplete = if incomplete.is_empty() {
+        "none"
+    } else {
+        &incomplete
+    };
+
+    scheduler_log.push_back(format!(
+        "t{} | started: {} | completed: {} | incomplete: {} | queued: {}",
+        report.tick,
+        started,
+        completed,
+        incomplete,
+        pending_tasks,
+    ));
+    while scheduler_log.len() > MAX_SCHEDULER_LOG_ENTRIES {
+        scheduler_log.pop_front();
+    }
+    format!(
+        "Last tick {}: started: {}; completed: {}; incomplete: {}",
+        report.tick,
+        started,
+        completed,
+        incomplete,
+    )
+}
+
+fn draw_wrapped_text(
+    text: &str,
+    x: f32,
+    mut y: f32,
+    max_width: f32,
+    font_size: f32,
+    line_height: f32,
+    color: Color,
+) -> f32 {
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_string()
+        } else {
+            format!("{line} {word}")
+        };
+        if !line.is_empty()
+            && measure_text(&candidate, None, font_size as u16, 1.0).width > max_width
+        {
+            draw_text(&line, x, y, font_size, color);
+            y += line_height;
+            line = word.to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        draw_text(&line, x, y, font_size, color);
+        y += line_height;
+    }
+    y
+}
+
 // Resolves a wall collision and applies restitution to the reflected velocity.
 fn check_collision(entity: &mut Entity) -> bool {
     let mut bounced = false;
@@ -293,8 +403,8 @@ fn check_collision(entity: &mut Entity) -> bool {
         bounced = true;
     }
 
-    if entity.position.y - entity.radius < 0.0 {
-        entity.position.y = entity.radius;
+    if entity.position.y - entity.radius < HUD_HEIGHT {
+        entity.position.y = HUD_HEIGHT + entity.radius;
         entity.velocity.y = entity.velocity.y.abs() * POOL_BALL_RESTITUTION;
         bounced = true;
     } else if entity.position.y + entity.radius > screen_height() {
@@ -533,7 +643,7 @@ fn new_named_hamster(name: &str) -> Hamster {
     };
     Hamster::new(
         name,
-        vec2(screen_width() * horizontal, screen_height() * vertical),
+        sandbox_position(horizontal, vertical),
         velocity,
     )
 }
@@ -560,6 +670,34 @@ fn remove_last_hamster(hamsters: &mut Vec<Hamster>) {
     }
 }
 
+fn create_engine(
+    scheduling_kind: SchedulingKind,
+    tick_budget: u32,
+    round_robin_quantum: u32,
+) -> FixedTickEngine<SchedulerPolicy> {
+    let policy = match scheduling_kind {
+        SchedulingKind::Fifo => SchedulerPolicy::fifo(),
+        SchedulingKind::Priority => SchedulerPolicy::priority(),
+        SchedulingKind::RoundRobin => SchedulerPolicy::round_robin(round_robin_quantum),
+    };
+    FixedTickEngine::new(policy, tick_budget)
+}
+
+fn reset_simulation(
+    scheduling_kind: SchedulingKind,
+    tick_budget: u32,
+    round_robin_quantum: u32,
+) -> (FixedTickEngine<SchedulerPolicy>, Vec<Hamster>) {
+    (
+        create_engine(scheduling_kind, tick_budget, round_robin_quantum),
+        vec![Hamster::new(
+            "Meep",
+            sandbox_position(0.3, 0.55),
+            vec2(180.0, 140.0),
+        )],
+    )
+}
+
 #[macroquad::main("Task-Scheduled Hamsters")]
 async fn main() {
     // Loads the shared texture once; all entities scale and render independently.
@@ -568,17 +706,17 @@ async fn main() {
         .expect("Failed to load hamster image");
     texture.set_filter(FilterMode::Nearest);
 
-    let mut hamsters = vec![Hamster::new(
-        "Meep",
-        vec2(screen_width() * 0.3, screen_height() * 0.55),
-        vec2(180.0, 140.0),
-    )];
     let mut scheduling_kind = SchedulingKind::Fifo;
-    let mut engine = FixedTickEngine::new(SchedulerPolicy::fifo(), 1);
+    let mut tick_budget = DEFAULT_TICK_BUDGET;
+    let mut round_robin_quantum = DEFAULT_ROUND_ROBIN_QUANTUM;
+    let (mut engine, mut hamsters) =
+        reset_simulation(scheduling_kind, tick_budget, round_robin_quantum);
     let mut simulation_timer = 0.0;
     let mut step_interval = 0.5;
-    let mut paused = false;
-    let mut active_task = String::from("Waiting for first task");
+    let mut paused = true;
+    let mut tick_status = String::from("Waiting for first tick");
+    let mut scheduler_log = VecDeque::new();
+    let mut completed_last_tick = 0;
     let mut previous_time = Instant::now();
 
     loop {
@@ -612,6 +750,26 @@ async fn main() {
         if is_key_pressed(KeyCode::R) {
             remove_last_hamster(&mut hamsters);
         }
+        let mut restart_simulation = false;
+        if is_key_pressed(KeyCode::Q) {
+            tick_budget = tick_budget.saturating_sub(1).max(MIN_TICK_BUDGET);
+            restart_simulation = true;
+        }
+        if is_key_pressed(KeyCode::E) {
+            tick_budget = (tick_budget + 1).min(MAX_TICK_BUDGET);
+            restart_simulation = true;
+        }
+        if is_key_pressed(KeyCode::Z) {
+            round_robin_quantum = round_robin_quantum
+                .saturating_sub(1)
+                .max(MIN_ROUND_ROBIN_QUANTUM);
+            restart_simulation = true;
+        }
+        if is_key_pressed(KeyCode::X) {
+            round_robin_quantum =
+                (round_robin_quantum + 1).min(MAX_ROUND_ROBIN_QUANTUM);
+            restart_simulation = true;
+        }
         let requested_scheduling_kind = if is_key_pressed(KeyCode::F1) {
             Some(SchedulingKind::Fifo)
         } else if is_key_pressed(KeyCode::F2) {
@@ -624,28 +782,19 @@ async fn main() {
         if let Some(requested) = requested_scheduling_kind {
             if requested != scheduling_kind {
                 scheduling_kind = requested;
-                engine = match scheduling_kind {
-                    SchedulingKind::Fifo => FixedTickEngine::new(SchedulerPolicy::fifo(), 1),
-                    SchedulingKind::Priority => {
-                        FixedTickEngine::new(SchedulerPolicy::priority(), 1)
-                    }
-                    SchedulingKind::RoundRobin => {
-                        FixedTickEngine::new(SchedulerPolicy::round_robin(10), 1)
-                    }
-                };
-                hamsters = vec![Hamster::new(
-                    "Meep",
-                    vec2(screen_width() * 0.3, screen_height() * 0.55),
-                    vec2(180.0, 140.0),
-                )];
-                simulation_timer = 0.0;
-                step_interval = 0.5;
-                paused = false;
-                active_task = String::from("Waiting for first task");
-                previous_time = Instant::now();
+                restart_simulation = true;
             }
         }
-        let mut completed_this_frame = 0;
+        if restart_simulation {
+            (engine, hamsters) =
+                reset_simulation(scheduling_kind, tick_budget, round_robin_quantum);
+                simulation_timer = 0.0;
+                step_interval = 0.5;
+                tick_status = String::from("Waiting for first tick");
+                scheduler_log.clear();
+                completed_last_tick = 0;
+                previous_time = Instant::now();
+        }
         if !paused {
             simulation_timer += delta_time;
             let mut steps = 0;
@@ -658,7 +807,13 @@ async fn main() {
                     schedule_frame_tasks(&mut engine, &hamsters);
                 }
                 let report = engine.run_tick();
-                completed_this_frame += report.completed_task_ids.len();
+                completed_last_tick = report.completed_task_ids.len();
+                tick_status = append_scheduler_log(
+                    &mut scheduler_log,
+                    &report,
+                    engine.pending_tasks(),
+                    &hamsters,
+                );
                 for hamster in &mut hamsters {
                     hamster.update_chase(FIXED_SIMULATION_STEP);
                     hamster.update_collision_cooldown(FIXED_SIMULATION_STEP);
@@ -672,7 +827,6 @@ async fn main() {
                 }
 
                 for task_id in &report.completed_task_ids {
-                    active_task = task_description(*task_id, &hamsters);
                     let cycle = hamsters.len() as u64 * 2;
                     let task_kind = *task_id % cycle;
                     let is_movement = task_kind % 2 == 1;
@@ -749,42 +903,138 @@ async fn main() {
         }
 
         clear_background(BLACK);
+        draw_rectangle(
+            0.0,
+            0.0,
+            screen_width(),
+            HUD_HEIGHT,
+            Color::new(0.015, 0.015, 0.02, 1.0),
+        );
+        let panel_padding = 12.0;
+        let split_x = screen_width() * 0.5;
+        let left_width = split_x - panel_padding * 2.0;
+        let right_panel_x = split_x + panel_padding;
+        let right_width = screen_width() - right_panel_x - panel_padding;
+        draw_line(
+            0.0,
+            HUD_HEIGHT,
+            screen_width(),
+            HUD_HEIGHT,
+            2.0,
+            DARKGRAY,
+        );
         let scheduling_name = match scheduling_kind {
             SchedulingKind::Fifo => "FIFO",
             SchedulingKind::Priority => "Priority",
             SchedulingKind::RoundRobin => "Round Robin",
         };
-        draw_text(
+        let mut left_y = draw_wrapped_text(
             &format!(
-                "{} | Tick: {}  |  Completed this frame: {}  |  Total: {}",
+                "{} | {} | Tick: {} | Budget: {} | RR quantum: {} | Tasks completed last tick: {} | Total tasks completed: {}",
                 scheduling_name,
+                if paused { "PAUSED" } else { "PLAYING" },
                 engine.current_tick(),
-                completed_this_frame,
+                tick_budget,
+                round_robin_quantum,
+                completed_last_tick,
                 engine.aggregate_metrics().completed_tasks,
             ),
             20.0,
             30.0,
-            24.0,
+            left_width - 16.0,
+            20.0,
+            22.0,
             WHITE,
         );
-        draw_text(
-            &format!("Active task: {}", active_task,),
+        let tick_status_text = if paused {
+            format!("Status: {}", tick_status)
+        } else {
+            String::from("Tick status: Waiting for pause")
+        };
+        left_y = draw_wrapped_text(
+            &tick_status_text,
             20.0,
-            60.0,
-            24.0,
+            left_y + 2.0,
+            left_width - 16.0,
+            20.0,
+            22.0,
             YELLOW,
         );
-        draw_text(
+        left_y = draw_wrapped_text(
+            &format!("Step interval: {:.3}s", step_interval),
+            20.0,
+            left_y + 2.0,
+            left_width - 16.0,
+            18.0,
+            20.0,
+            LIGHTGRAY,
+        );
+        left_y = draw_wrapped_text(
             &format!(
-                "Step interval: {:.3}s  |  Up/Down: speed  |  Space: pause/resume  |  A: add  |  R: remove  |  F1: FIFO  |  F2: Priority  |  F3: RR",
-                step_interval,
+                "Up/Down: speed | Q/E: budget {}-{} | Z/X: RR quantum {}-{}",
+                MIN_TICK_BUDGET, MAX_TICK_BUDGET, MIN_ROUND_ROBIN_QUANTUM, MAX_ROUND_ROBIN_QUANTUM
             ),
             20.0,
-            90.0,
-            22.0,
+            left_y + 2.0,
+            left_width - 16.0,
+            18.0,
+            20.0,
+            LIGHTGRAY,
+        );
+        left_y = draw_wrapped_text(
+            "Space: pause/resume | A: add | R: remove | F1: FIFO | F2: Priority | F3: RR",
+            20.0,
+            left_y + 2.0,
+            left_width - 16.0,
+            18.0,
+            20.0,
+            LIGHTGRAY,
+        );
+        let log_x = right_panel_x + 8.0;
+        draw_text("Scheduler log:", log_x, 32.0, 20.0, GOLD);
+        let mut log_y = 54.0;
+        for entry in &scheduler_log {
+            if log_y >= HUD_HEIGHT - 54.0 {
+                break;
+            }
+            log_y = draw_wrapped_text(
+                entry,
+                log_x,
+                log_y,
+                right_width - 16.0,
+                14.0,
+                17.0,
+                LIGHTGRAY,
+            );
+        }
+        let reference_y = HUD_HEIGHT - 42.0;
+        let reference_gap = 12.0;
+        let reference_width =
+            ((right_width - 16.0 - reference_gap) * 0.5).max(70.0);
+        let priority_x = log_x + reference_width + reference_gap;
+
+        draw_text("Action costs:", log_x, reference_y, 16.0, GOLD);
+        draw_wrapped_text(
+            "Move 1 | Collision 1 | Chase 2 | Flee 2 | Pounce 3 | Knockback 3",
+            log_x,
+            reference_y + 16.0,
+            reference_width,
+            14.0,
+            16.0,
+            LIGHTGRAY,
+        );
+        draw_text("Priorities:", priority_x, reference_y, 16.0, GOLD);
+        draw_wrapped_text(
+            "Collision 1 | Knockback 2 | Pounce 3 | Chase 4 | Flee 5 | Move 10",
+            priority_x,
+            reference_y + 16.0,
+            reference_width,
+            14.0,
+            16.0,
             LIGHTGRAY,
         );
 
+        let mut status_y = left_y + 4.0;
         for (index, hamster) in hamsters.iter().enumerate() {
             draw_hamster(&texture, hamster);
             let behavior = match hamster.action {
@@ -804,7 +1054,7 @@ async fn main() {
                     format!("Moving {}", movement_direction(hamster.entity.velocity))
                 }
             };
-            draw_text(
+            status_y = draw_wrapped_text(
                 &format!(
                     "{}: {}  |  Velocity: ({:.0}, {:.0})  |  Collisions: {}",
                     hamster.name,
@@ -814,8 +1064,10 @@ async fn main() {
                     hamster.collisions,
                 ),
                 20.0,
-                120.0 + index as f32 * 30.0,
-                22.0,
+                status_y,
+                left_width - 16.0,
+                18.0,
+                20.0,
                 WHITE,
             );
         }
@@ -893,6 +1145,39 @@ mod tests {
                 knockback_remaining: 0.0,
             },
         ]
+    }
+
+    #[test]
+    fn priority_budget_defers_normal_movement_beyond_encounter_actions() {
+        let mut hamsters = hamsters().to_vec();
+        hamsters[0].action = HamsterAction::Flee;
+        hamsters[1].action = HamsterAction::Chase;
+        hamsters[1].chase_target = Some(0);
+        hamsters[2].action = HamsterAction::Normal;
+
+        let mut engine = FixedTickEngine::new(SchedulerPolicy::priority(), 4);
+        schedule_frame_tasks(&mut engine, &hamsters);
+
+        let first_tick = engine.run_tick();
+        assert_eq!(first_tick.work_units, 4);
+
+        let second_tick = engine.run_tick();
+        let selected = second_tick
+            .selected_task_ids
+            .iter()
+            .map(|task_id| task_description(*task_id, &hamsters))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            selected,
+            vec![
+                "Beep: Chasing Meep",
+                "Meep: Fleeing",
+                "Peep: Movement",
+            ]
+        );
+        assert_eq!(second_tick.work_units, 4);
+        assert_eq!(engine.pending_tasks(), 0);
     }
 
     #[test]

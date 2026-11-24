@@ -1,8 +1,8 @@
 # Simple Scheduler
 
 This project demonstrates how a CPU scheduler can coordinate work for multiple
-ongoing entities. It is written in Rust with Macroquad 0.4.16 and currently
-simulates two independently tracked hamsters.
+ongoing entities. It is written in Rust with Macroquad 0.4.16 and supports up
+to three independently tracked hamsters.
 
 ## Scheduler foundation
 
@@ -25,16 +25,25 @@ than following one fixed straight line.
 
 ## Try it yourself
 
-The scheduler has a human-readable command-line demo. A variety of prototypes were worked on in the process of getting accustomed to Macroquad. From the project root, run:
+The scheduler has a human-readable command-line comparison demo. A variety of prototypes were worked on in the process of getting accustomed to Macroquad. From the project root, run:
 
 ```powershell
 cargo run --example scheduler_demo
+cargo run --example scheduler_demo -- interactive
+cargo run --example scheduler_demo -- fifo 4
+cargo run --example scheduler_demo -- priority 4
+cargo run --example scheduler_demo -- rr 4 2
 ```
 
-It adds three tasks, prints their metadata, and shows the order in which FIFO
-runs them. The simulated cost advances the displayed tick, so you can edit
-the task costs or deadlines in `examples/scheduler_demo.rs` and immediately
-see how the results change.
+Running with no arguments performs a deterministic three-policy comparison using
+a budget of four work units and an RR quantum of two. `interactive` opens a
+text-based prompt for policy, budget, and, for Round Robin, quantum. Direct
+policy commands provide reproducible one-policy runs for screenshots and tables.
+
+The demo uses the same shared hamster-encounter workload for FIFO, Priority,
+and Round Robin. It records tasks started, completed, and left incomplete in
+each tick, along with queue depth and per-task timing metrics. It also prints
+aggregate throughput and CPU utilization.
 
 To run the automated checks instead:
 
@@ -49,20 +58,22 @@ collision-triggered color changes are scheduled as tasks:
 cargo run --example task_entity
 ```
 
-The main application runs two independently tracked, named hamsters. Each
-hamster has separate movement and collision-check tasks, direction, velocity,
-and collision counter. Hamsters bounce from window boundaries and collide with
-each other by separating and exchanging velocities; each hamster records the
-collision:
+The main application runs up to three independently tracked, named hamsters.
+Each hamster has separate movement or encounter tasks and collision-check tasks,
+direction, velocity, and collision counter. Hamsters bounce from window
+boundaries and collide with each other by separating and exchanging velocities;
+each hamster records the collision:
 
 ```powershell
 cargo run
 ```
 
-The main application runs one scheduler work unit per simulation step so FIFO
-context switches are visible. The HUD shows the active task, scheduler tick,
-completed-task totals, each hamster's direction and velocity, and its collision
-count.
+The main application uses a four-unit scheduler budget per simulation step.
+The HUD shows the scheduler status, scheduler tick, budget, completed-task
+totals, each hamster's direction and velocity, and its collision count.
+The scheduler log records tasks started, completed, and left incomplete at the
+end of each tick. The tick-status area remains on the last paused tick while
+running and displays "Waiting for pause" during continuous playback.
 
 Controls:
 
@@ -75,10 +86,13 @@ Controls:
 - `F1` switches to FIFO.
 - `F2` switches to Priority.
 - `F3` switches to Round Robin.
+- `Q`/`E` decrease/increase the scheduler tick budget from 1 to 16.
+- `Z`/`X` decrease/increase the Round Robin quantum from 1 to 8.
 
-Switching scheduling types resets the simulation to one **Meep** hamster,
-zeroes scheduler and simulation counters, restores the default step interval,
-resumes execution, and clears the active-task label.
+Changing the scheduling type, tick budget, or Round Robin quantum resets the
+simulation to one **Meep** hamster, zeroes scheduler and simulation counters,
+restores the default step interval, and clears the scheduler log and tick
+status. The current paused or playing state is preserved.
 
 The interval ranges from `0.025` seconds to `1.0` seconds. The fastest
 setting displays as `0.025s`. The application uses a monotonic clock, limits
@@ -141,24 +155,64 @@ The project distinguishes between a simulation tick and a scheduler quantum:
 
 - A **simulation tick** is one call to `FixedTickEngine::run_tick`. It selects
   ready work and advances scheduler metrics.
-- A **scheduler quantum** is the amount of simulated work the scheduler may
-  execute during one tick. The main application uses a budget of one work unit,
-  making each FIFO task visible.
+- The **tick budget** limits the total work in one tick. The main application
+  defaults to four work units. The **Round Robin quantum** limits work per
+  selection, and a task can be selected again during the same tick. Normal
+  movement and collision checks cost one unit, while chase, flee, pounce, and
+  knockback actions cost two or three units.
 - A task's `simulated_cost` describes how many work units it needs. If the remaining budget is too small, the task must continue during a later tick or be re-queued according to the active policy.
+- Priority scheduling uses these numeric precedence values, where lower values
+  run first: collision check `1`, knockback `2`, pounce `3`, chase `4`, flee
+  `5`, and normal movement `10`. FIFO and Round Robin ignore priorities;
+  Round Robin rotates unfinished work according to its quantum.
 
-Adding more hamsters adds movement and collision-check tasks to the FIFO queue.
-As task count grows, the fixed scheduler work budget completes a smaller
-portion of the overall activity per frame, so the simulation is expected to
-appear slower even though each movement step advances by the same 1/60-second
-physics quantum. The HUD's run-time state indicator is not used; FIFO tick and
-active-task information are sufficient to show scheduling progress.
+## Scheduling behavior and starvation
+
+The live application replenishes tasks in complete action cycles. It creates
+one cycle containing movement or encounter work and collision checks for all
+active hamsters. It does not create a fresh cycle until all tasks from the
+existing cycle leave the scheduler queue.
+
+This is batch-based replenishment: an existing cycle drains before newly
+collected behavior can enter the queue. It does not mean
+that a single task always runs to completion within one scheduler tick.
+`remaining_cost` allows a task to receive only part of its work during a tick,
+then preserve the unfinished work for a later tick.
+
+A task may be suspended because of:
+
+- insufficient budget remaining for the task's full cost, deferring it to a
+  later tick;
+- a Round Robin quantum, which can rotate it behind other ready tasks even
+  within the same tick.
+
+The process is therefore best described as **batch-based task-cycle
+collection with simulated time-sliced execution**. Priority selection
+and Round Robin rotation occur within a cycle, but neither policy adds a new
+cycle until the current cycle is empty.
+
+This cycle-draining design reduces starvation caused by continuous queue
+replenishment because no new tasks are admitted while the current finite cycle
+is queued. However, it does not guarantee fairness in a continuous Priority
+workload: a higher-priority task stream could delay lower-priority work
+indefinitely unless priorities age or lower-priority tasks receive a policy
+guarantee. Round Robin provides stronger fairness through queue rotation.
+The live simulation limits starvation risk with its finite-cycle queue rather
+than with an independent aging or starvation-prevention mechanism.
+
+Adding more hamsters adds movement and collision-check tasks to the scheduler
+queue. As task count grows, the fixed four-unit scheduler budget completes a
+smaller portion of the overall activity per frame, so the simulation is
+expected to appear slower even though each completed movement step advances by
+the same 1/60-second physics quantum. The HUD displays the active policy,
+budget, and scheduler log so the work distribution remains observable.
 
 The interactive demonstration supports:
 
 - **Priority:** select the ready task with the highest scheduling precedence.
   Lower numeric priority values represent higher precedence.
 - **Round Robin:** re-queue unfinished work and rotate ready tasks so that
-  waiting tasks receive a fair turn. The initial policy quantum is 10 work units.
+  waiting tasks receive a fair turn. The initial policy quantum is 2 work units.
 - **MLFQ:** future work after the current FIFO, Priority, and Round Robin policies.
 
 ## Metrics
@@ -169,6 +223,11 @@ The scheduler model includes `TaskMetrics` for per-task measurements:
 - **Turnaround time:** completion tick minus release tick.
 - **Response time:** first-run tick minus release tick.
 - **Deadline miss:** recorded when a task is not completed by its deadline.
+
+Known limitation: service is currently counted once per selection rather than
+once per distinct tick. If a task is selected multiple times in one tick,
+waiting times can be incorrect or underflow in debug builds (for example,
+`cargo run --example scheduler_demo -- rr 8 1`).
 
 `SchedulerMetrics` stores experiment-wide elapsed ticks, busy ticks, and completed tasks. It derives:
 
