@@ -109,28 +109,23 @@ fn encounter_tasks() -> Vec<Task> {
 }
 
 fn task_names(report_ids: &[u64]) -> String {
-    let names = encounter_tasks();
-    let mut labels = Vec::new();
-
-    for task_id in report_ids {
-        if let Some(task) = names.iter().find(|task| task.id == *task_id) {
-            labels.push(task.name.as_str());
-        }
-    }
-
-    if labels.is_empty() {
+    if report_ids.is_empty() {
         "none".to_string()
     } else {
-        labels.join(", ")
+        report_ids
+            .iter()
+            .map(|task_id| format!("Task {task_id}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
 fn print_workload() {
-    println!("Shared encounter workload:");
+    println!("Shared task workload:");
     for task in encounter_tasks() {
         println!(
-            "  [{}] {:21} priority {:2}, cost {}, deadline {}",
-            task.id, task.name, task.priority, task.simulated_cost, task.deadline
+            "  Task {}: priority {:2}, cost {}, deadline {}",
+            task.id, task.priority, task.simulated_cost, task.deadline
         );
     }
 }
@@ -369,4 +364,36 @@ fn main() {
     }
 
     run_demo(policy, tick_budget, rr_quantum);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{encounter_tasks, task_names};
+    use scheduler_project::scheduler::{FixedTickEngine, SchedulerPolicy};
+
+    #[test]
+    fn task_labels_use_ids_in_selection_order() {
+        assert_eq!(task_names(&[8, 4, 7]), "Task 8, Task 4, Task 7");
+        assert_eq!(task_names(&[]), "none");
+    }
+
+    #[test]
+    fn round_robin_multiple_selections_record_distinct_service_ticks() {
+        let mut engine = FixedTickEngine::new(SchedulerPolicy::round_robin(1), 8);
+        for task in encounter_tasks() {
+            engine.add_task(task);
+        }
+
+        engine.run_tick();
+        let report = engine.run_tick();
+        assert_eq!(report.selected_task_ids, vec![4, 6, 7, 8, 7, 8]);
+        assert_eq!(report.completed_task_ids, vec![4, 6, 7, 8]);
+        for task_id in [7, 8] {
+            let metrics = &engine.task_metrics()[&task_id];
+            assert_eq!(metrics.service_ticks, 2);
+            assert_eq!(metrics.waiting_time(), Some(0));
+            assert_eq!(metrics.turnaround_time(), Some(2));
+            assert_eq!(metrics.response_time(), Some(0));
+        }
+    }
 }

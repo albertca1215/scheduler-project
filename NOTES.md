@@ -145,7 +145,8 @@ Movement and timers now use a fixed 60 Hz simulation quantum:
 - Slowed modes present FIFO task cycles at the selected interval, while each
   visible cycle advances only one fixed 1/60-second physics quantum.
 - Pounce setup and launch use the fixed simulation timer, not the movement-task
-  rate.
+  rate. The HUD converts behavior timers to approximate remaining scheduler
+  ticks; pounce shows setup time and knockback may finish early as it slows.
 
 When a knocked-back hamster strikes another hamster, that struck hamster
 overrides Pounce, Chase, Flee, or Normal behavior and enters Knockback
@@ -228,10 +229,9 @@ The scheduler model includes `TaskMetrics` for per-task measurements:
 - **Response time:** first-run tick minus release tick.
 - **Deadline miss:** recorded when a task is not completed by its deadline.
 
-Known limitation: service is currently counted once per selection rather than
-once per distinct tick. If a task is selected multiple times in one tick,
-waiting times can be incorrect or underflow in debug builds (for example,
-`cargo run --example scheduler_demo -- rr 8 1`).
+Service time counts distinct scheduler ticks in which a task received work,
+even when Round Robin selects it multiple times in one tick. Waiting time is
+therefore measured in whole ticks without service.
 
 `SchedulerMetrics` stores experiment-wide elapsed ticks, busy ticks, and completed tasks. It derives:
 

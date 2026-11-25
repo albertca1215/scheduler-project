@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 /// The timing guarantee associated with a task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +235,7 @@ impl<S: Scheduler> FixedTickEngine<S> {
         let mut work_units = 0;
         let mut selected_task_ids = Vec::new();
         let mut completed_task_ids = Vec::new();
+        let mut serviced_task_ids = HashSet::new();
 
         while budget_remaining > 0 {
             let Some(mut task) = self.scheduler.next_task() else {
@@ -265,7 +266,9 @@ impl<S: Scheduler> FixedTickEngine<S> {
             task.remaining_cost -= work;
             budget_remaining -= work;
             work_units += work;
-            task_metrics.record_service(1);
+            if work > 0 && serviced_task_ids.insert(task.id) {
+                task_metrics.record_service(1);
+            }
 
             if task.remaining_cost == 0 {
                 let completion_tick = tick + 1;
@@ -467,6 +470,26 @@ impl SchedulerPolicy {
     pub fn round_robin(quantum: u32) -> Self {
         Self::RoundRobin(RoundRobinScheduler::new(quantum))
     }
+
+    fn queued_tasks(&self) -> Vec<&Task> {
+        match self {
+            Self::Fifo(scheduler) => scheduler.queue.iter().collect(),
+            Self::Priority(scheduler) => scheduler
+                .queues
+                .values()
+                .flat_map(|queue| queue.iter())
+                .collect(),
+            Self::RoundRobin(scheduler) => scheduler.queue.iter().collect(),
+        }
+    }
+}
+
+impl FixedTickEngine<SchedulerPolicy> {
+    /// Returns tasks still queued in scheduler selection order.
+    #[must_use]
+    pub fn queued_tasks(&self) -> Vec<&Task> {
+        self.scheduler.queued_tasks()
+    }
 }
 
 impl Scheduler for SchedulerPolicy {
@@ -608,6 +631,31 @@ mod tests {
     }
 
     #[test]
+    fn queued_tasks_follow_policy_order_after_partial_work() {
+        for (policy, expected) in [
+            (SchedulerPolicy::fifo(), vec![2, 1]),
+            (SchedulerPolicy::priority(), vec![1, 2]),
+            (SchedulerPolicy::round_robin(1), vec![2, 1]),
+        ] {
+            let mut engine = FixedTickEngine::new(policy, 1);
+            let mut first = task(1);
+            first.simulated_cost = 2;
+            first.remaining_cost = 2;
+            let mut second = task(2);
+            second.priority = 10;
+            engine.add_task(first);
+            engine.add_task(second);
+            engine.run_tick();
+            let ids: Vec<_> = engine.queued_tasks().iter().map(|task| task.id).collect();
+            assert_eq!(ids, expected);
+            while engine.pending_tasks() > 0 {
+                engine.run_tick();
+            }
+            assert!(engine.queued_tasks().is_empty());
+        }
+    }
+
+    #[test]
     fn round_robin_quantum_limits_work_before_requeueing() {
         let mut engine = FixedTickEngine::new(RoundRobinScheduler::new(2), 5);
         engine.add_task(Task::new(
@@ -634,8 +682,16 @@ mod tests {
         assert_eq!(report.work_units, 5);
         assert_eq!(report.completed_task_ids, vec![2]);
         assert_eq!(engine.pending_tasks(), 1);
-        assert_eq!(engine.task_metrics()[&1].service_ticks, 2);
+        assert_eq!(report.selected_task_ids, vec![1, 2, 1]);
+        assert_eq!(engine.task_metrics()[&1].service_ticks, 1);
         assert_eq!(engine.task_metrics()[&2].completion_tick, Some(1));
+
+        let second_tick = engine.run_tick();
+        assert_eq!(second_tick.completed_task_ids, vec![1]);
+        let metrics = &engine.task_metrics()[&1];
+        assert_eq!(metrics.service_ticks, 2);
+        assert_eq!(metrics.waiting_time(), Some(0));
+        assert_eq!(metrics.turnaround_time(), Some(2));
     }
 
     #[test]

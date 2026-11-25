@@ -228,6 +228,10 @@ fn movement_direction(velocity: Vec2) -> &'static str {
     }
 }
 
+fn remaining_ticks(simulated_seconds: f32) -> u32 {
+    (simulated_seconds.max(0.0) / FIXED_SIMULATION_STEP).ceil() as u32
+}
+
 // Adds movement and collision-check work to the active scheduler queue.
 fn schedule_frame_tasks(
     engine: &mut FixedTickEngine<SchedulerPolicy>,
@@ -241,24 +245,25 @@ fn schedule_frame_tasks(
         let task_offset = (hamster_index * 2) as u64;
         let hamster_index = hamster_index as usize;
         let activity = match hamsters[hamster_index].action {
-            HamsterAction::Chase => ("Chase", BehaviorType::Chasing, 4, 2),
-            HamsterAction::Pounce => ("Pounce", BehaviorType::Pouncing, 3, 3),
-            HamsterAction::Flee => ("Flee", BehaviorType::Fleeing, 5, 2),
-            HamsterAction::Knockback => ("Knockback", BehaviorType::Knockback, 2, 3),
-            HamsterAction::Normal => ("Move", BehaviorType::Movement, 10, 1),
+            HamsterAction::Chase => (BehaviorType::Chasing, 4, 2),
+            HamsterAction::Pounce => (BehaviorType::Pouncing, 3, 3),
+            HamsterAction::Flee => (BehaviorType::Fleeing, 5, 2),
+            HamsterAction::Knockback => (BehaviorType::Knockback, 2, 3),
+            HamsterAction::Normal => (BehaviorType::Movement, 10, 1),
         };
+        let task_id = first_task_id + task_offset;
         engine.add_task(Task::new(
-            first_task_id + task_offset,
-            format!("{} {}", activity.0, hamsters[hamster_index].name),
-            activity.2,
+            task_id,
+            task_description(task_id, hamsters),
+            activity.1,
             tick + 1,
             DeadlineType::Hard,
-            activity.3,
-            activity.1,
+            activity.2,
+            activity.0,
         ));
         engine.add_task(Task::new(
-            first_task_id + task_offset + 1,
-            format!("Check {} collision", hamsters[hamster_index].name),
+            task_id + 1,
+            task_description(task_id + 1, hamsters),
             1,
             tick + 1,
             DeadlineType::Hard,
@@ -305,7 +310,7 @@ fn task_description(task_id: u64, hamsters: &[Hamster]) -> String {
 fn append_scheduler_log(
     scheduler_log: &mut VecDeque<String>,
     report: &scheduler_project::scheduler::TickReport,
-    pending_tasks: usize,
+    queued_tasks: &[&Task],
     hamsters: &[Hamster],
 ) -> String {
     let started = report
@@ -338,6 +343,12 @@ fn append_scheduler_log(
     } else {
         &incomplete
     };
+    let queued = queued_tasks
+        .iter()
+        .map(|task| task.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let queued = if queued.is_empty() { "none" } else { &queued };
 
     scheduler_log.push_back(format!(
         "t{} | started: {} | completed: {} | incomplete: {} | queued: {}",
@@ -345,17 +356,18 @@ fn append_scheduler_log(
         started,
         completed,
         incomplete,
-        pending_tasks,
+        queued_tasks.len(),
     ));
     while scheduler_log.len() > MAX_SCHEDULER_LOG_ENTRIES {
         scheduler_log.pop_front();
     }
     format!(
-        "Last tick {}: started: {}; completed: {}; incomplete: {}",
+        "Last tick {} | Started: {} | Completed: {} | Incomplete: {} | Queued: {}",
         report.tick,
         started,
         completed,
         incomplete,
+        queued,
     )
 }
 
@@ -818,10 +830,11 @@ async fn main() {
                 }
                 let report = engine.run_tick();
                 completed_last_tick = report.completed_task_ids.len();
+                let queued_tasks = engine.queued_tasks();
                 tick_status = append_scheduler_log(
                     &mut scheduler_log,
                     &report,
-                    engine.pending_tasks(),
+                    &queued_tasks,
                     &hamsters,
                 );
                 for hamster in &mut hamsters {
@@ -1051,14 +1064,27 @@ async fn main() {
                 HamsterAction::Chase => {
                     let target_index = hamster.chase_target.unwrap_or(index);
                     format!(
-                        "Chasing {} ({:.1}s)",
-                        hamsters[target_index].name, hamster.chase_remaining
+                        "Chasing {} (~{} ticks)",
+                        hamsters[target_index].name, remaining_ticks(hamster.chase_remaining)
                     )
                 }
-                HamsterAction::Pounce => format!("Pouncing {:.1}s", hamster.pounce_remaining),
-                HamsterAction::Flee => format!("Fleeing ({:.1}s)", hamster.chase_remaining),
+                HamsterAction::Pounce => {
+                    format!(
+                        "Pouncing (setup ~{} ticks)",
+                        remaining_ticks(hamster.pounce_remaining)
+                    )
+                }
+                HamsterAction::Flee => {
+                    format!(
+                        "Fleeing (~{} ticks)",
+                        remaining_ticks(hamster.chase_remaining)
+                    )
+                }
                 HamsterAction::Knockback => {
-                    format!("Knocked back ({:.1}s)", hamster.knockback_remaining)
+                    format!(
+                        "Knocked back (up to ~{} ticks)",
+                        remaining_ticks(hamster.knockback_remaining)
+                    )
                 }
                 HamsterAction::Normal => {
                     format!("Moving {}", movement_direction(hamster.entity.velocity))
@@ -1089,6 +1115,85 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paused_tick_status_separates_task_lists() {
+        let report = scheduler_project::scheduler::TickReport {
+            tick: 925,
+            work_units: 1,
+            idle_units: 0,
+            selected_task_ids: vec![2, 3],
+            completed_task_ids: vec![2],
+        };
+        let mut log = VecDeque::new();
+        let task = Task::new(
+            3,
+            "Beep: Movement",
+            10,
+            10,
+            DeadlineType::Hard,
+            1,
+            BehaviorType::Movement,
+        );
+        let status = append_scheduler_log(&mut log, &report, &[&task], &hamsters());
+
+        assert_eq!(
+            format!("Status: {status}"),
+            "Status: Last tick 925 | Started: Meep: Collision check, Beep: Movement | Completed: Meep: Collision check | Incomplete: Beep: Movement | Queued: Beep: Movement"
+        );
+    }
+
+    #[test]
+    fn tick_status_includes_partially_serviced_and_unselected_queued_tasks() {
+        let mut hamsters = hamsters();
+        hamsters[1].action = HamsterAction::Chase;
+        hamsters[1].chase_target = Some(2);
+        hamsters[2].action = HamsterAction::Flee;
+        let mut engine = FixedTickEngine::new(SchedulerPolicy::priority(), 4);
+        schedule_frame_tasks(&mut engine, &hamsters);
+        let report = engine.run_tick();
+
+        let mut log = VecDeque::new();
+        let status = append_scheduler_log(&mut log, &report, &engine.queued_tasks(), &hamsters);
+        assert!(status.ends_with(
+            "Incomplete: Beep: Chasing Peep | Queued: Beep: Chasing Peep, Peep: Fleeing, Meep: Movement"
+        ));
+        assert!(log.back().unwrap().ends_with("queued: 3"));
+
+        while engine.pending_tasks() > 0 {
+            let report = engine.run_tick();
+            let status = append_scheduler_log(&mut log, &report, &engine.queued_tasks(), &hamsters);
+            if engine.pending_tasks() == 0 {
+                assert!(status.ends_with("| Queued: none"));
+            }
+        }
+    }
+
+    #[test]
+    fn queued_labels_retain_the_action_at_scheduling_time() {
+        let mut hamsters = hamsters();
+        hamsters[1].action = HamsterAction::Chase;
+        hamsters[1].chase_target = Some(2);
+        let mut engine = FixedTickEngine::new(SchedulerPolicy::fifo(), 1);
+        schedule_frame_tasks(&mut engine, &hamsters);
+        let report = engine.run_tick();
+
+        hamsters[1].action = HamsterAction::Normal;
+        hamsters[1].chase_target = None;
+        let mut log = VecDeque::new();
+        let status = append_scheduler_log(&mut log, &report, &engine.queued_tasks(), &hamsters);
+        assert!(status.ends_with(
+            "Queued: Meep: Collision check, Beep: Chasing Peep, Beep: Collision check, Peep: Movement, Peep: Collision check"
+        ));
+    }
+
+    #[test]
+    fn countdown_display_converts_simulated_time_to_ticks() {
+        assert_eq!(remaining_ticks(5.0), 300);
+        assert_eq!(remaining_ticks(0.5), 30);
+        assert_eq!(remaining_ticks(FIXED_SIMULATION_STEP / 2.0), 1);
+        assert_eq!(remaining_ticks(0.0), 0);
+    }
 
     #[test]
     fn roster_starts_with_meep_and_add_remove_keeps_meep() {

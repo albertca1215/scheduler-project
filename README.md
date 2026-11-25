@@ -42,9 +42,15 @@ costs and priorities. The scheduler log shows selections (`started`), tasks
 completed, selected tasks still incomplete at the end of the tick, and the
 number left queued. A task may appear as `started` again when it resumes; an
 incomplete task has retained its progress. When paused, the status shows the
-most recently processed tick. Tick reports are zero-indexed, while the top
+most recently processed tick and lists tasks still queued afterward, including
+partially completed tasks and those not selected yet. Queued names reflect the
+tasks as created. Tick reports are zero-indexed, while the top
 counter advances after processing, so the latest report is normally one less
 than that counter.
+
+Behavior countdowns display approximate remaining scheduler ticks, converted
+from the existing simulated-time timers. Pounce shows its setup countdown;
+knockback may end earlier if its velocity decays sufficiently.
 
 ## Run the deterministic scheduler demo
 
@@ -73,12 +79,6 @@ RR quantum is omitted, it defaults to 2. Alternatively, use the text prompts:
 ```powershell
 cargo run --example scheduler_demo -- interactive
 ```
-
-Known limitation: if a task is selected more than once in the same tick, the
-waiting-time calculation counts each selection as a separate service tick. This
-can produce incorrect waiting times or a debug-build overflow panic; for
-example, `rr 8 1` currently panics when printing task metrics. The default
-comparison and the commands above run successfully.
 
 Use the deterministic demo for repeatable comparisons; the graphical
 simulation uses random movement and encounter choices, so separate runs need
