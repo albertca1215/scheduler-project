@@ -61,7 +61,10 @@ cargo run --example scheduler_demo
 With no arguments, this runs the same fixed eight-task workload through FIFO,
 Priority, and Round Robin with a budget of 4 and RR quantum of 2. It prints
 the workload, per-tick selections, completions, incomplete work and queue
-count, followed by task metrics and aggregate throughput and utilization.
+count, followed by each task's response, waiting, and turnaround times in
+ticks, aggregate throughput, and budget utilization
+(work units used divided by total available work units). Budget utilization
+measures simulated capacity, not actual CPU usage.
 The workload is synthetic: it includes all encounter action types, not a
 literal snapshot of one three-hamster simulation cycle.
 

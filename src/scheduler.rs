@@ -134,6 +134,8 @@ pub struct SchedulerMetrics {
     pub elapsed_ticks: u64,
     pub busy_ticks: u64,
     pub completed_tasks: u64,
+    pub work_units: u64,
+    pub budget_units: u64,
 }
 
 impl SchedulerMetrics {
@@ -143,6 +145,8 @@ impl SchedulerMetrics {
             elapsed_ticks: 0,
             busy_ticks: 0,
             completed_tasks: 0,
+            work_units: 0,
+            budget_units: 0,
         }
     }
 
@@ -161,6 +165,15 @@ impl SchedulerMetrics {
             0.0
         } else {
             self.busy_ticks as f64 / self.elapsed_ticks as f64
+        }
+    }
+
+    #[must_use]
+    pub fn budget_utilization(&self) -> f64 {
+        if self.budget_units == 0 {
+            0.0
+        } else {
+            self.work_units as f64 / self.budget_units as f64
         }
     }
 }
@@ -285,6 +298,8 @@ impl<S: Scheduler> FixedTickEngine<S> {
 
         self.current_tick += 1;
         self.aggregate_metrics.elapsed_ticks += 1;
+        self.aggregate_metrics.work_units += u64::from(work_units);
+        self.aggregate_metrics.budget_units += u64::from(self.tick_budget);
         if work_units > 0 {
             self.aggregate_metrics.busy_ticks += 1;
         }
@@ -712,10 +727,14 @@ mod tests {
             elapsed_ticks: 10,
             busy_ticks: 7,
             completed_tasks: 4,
+            work_units: 28,
+            budget_units: 40,
         };
 
         assert_eq!(metrics.throughput(), 0.4);
         assert_eq!(metrics.cpu_utilization(), 0.7);
+        assert_eq!(metrics.budget_utilization(), 0.7);
+        assert_eq!(SchedulerMetrics::new().budget_utilization(), 0.0);
     }
 
     #[test]
@@ -747,5 +766,11 @@ mod tests {
         assert_eq!(task_metrics.waiting_time(), Some(0));
         assert_eq!(engine.aggregate_metrics().completed_tasks, 1);
         assert_eq!(engine.aggregate_metrics().busy_ticks, 2);
+        assert_eq!(engine.aggregate_metrics().work_units, 3);
+        assert_eq!(engine.aggregate_metrics().budget_units, 4);
+        assert_eq!(engine.aggregate_metrics().budget_utilization(), 0.75);
+
+        engine.run_tick();
+        assert_eq!(engine.aggregate_metrics().budget_utilization(), 0.5);
     }
 }

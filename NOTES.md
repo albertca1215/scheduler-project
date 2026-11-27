@@ -45,7 +45,8 @@ The demo uses the same fixed eight-task workload for FIFO, Priority, and Round
 Robin. All tasks enter the queue at the start; no new tasks arrive during the
 run. It records tasks started, completed, and left incomplete in
 each tick, along with queue depth and per-task timing metrics. It also prints
-aggregate throughput and CPU utilization.
+aggregate throughput and budget utilization. Per-task output shows response,
+waiting, and turnaround times in ticks; deadline misses are not displayed.
 
 To run the automated checks instead:
 
@@ -240,10 +241,14 @@ Service time counts distinct scheduler ticks in which a task received work,
 even when Round Robin selects it multiple times in one tick. Waiting time is
 therefore measured in whole ticks without service.
 
-`SchedulerMetrics` stores experiment-wide elapsed ticks, busy ticks, and completed tasks. It derives:
+`SchedulerMetrics` stores experiment-wide elapsed ticks, busy ticks, completed
+tasks, work units used, and available budget units. It derives:
 
 - **Throughput:** completed tasks per elapsed tick.
-- **CPU utilization:** busy ticks divided by elapsed ticks.
+- **Budget utilization:** work units used divided by available budget units
+  across all elapsed ticks. This measures simulated capacity, not real CPU usage.
+- **Busy-tick ratio:** busy ticks divided by elapsed ticks, available through
+  `cpu_utilization()` for existing callers; a tick is busy if it does any work.
 
 `FixedTickEngine<S>` populates these values while consuming task
 `remaining_cost`, re-queuing incomplete tasks, and recording per-tick reports.

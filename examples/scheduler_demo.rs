@@ -172,23 +172,28 @@ fn run_demo(policy: PolicyChoice, tick_budget: u32, rr_quantum: u32) {
         );
     }
 
-    println!("\nTask metrics:");
+    println!("\nTask metrics (ticks):");
     for (task_id, metrics) in engine.task_metrics() {
         println!(
-            "  Task {:2}: response {:?}, waiting {:?}, turnaround {:?}, deadline missed {}",
+            "  Task {:2}: Response Time: {}, Waiting Time: {}, Turnaround Time: {}",
             task_id,
-            metrics.response_time(),
-            metrics.waiting_time(),
-            metrics.turnaround_time(),
-            metrics.deadline_missed
+            metrics
+                .response_time()
+                .expect("completed task must have a response time"),
+            metrics
+                .waiting_time()
+                .expect("completed task must have a waiting time"),
+            metrics
+                .turnaround_time()
+                .expect("completed task must have a turnaround time")
         );
     }
 
     let aggregate = engine.aggregate_metrics();
     println!(
-        "Aggregate: throughput {:.2} tasks/tick, CPU utilization {:.0}%\n",
+        "Aggregate: throughput {:.2} tasks/tick, budget utilization {:.2}%\n",
         aggregate.throughput(),
-        aggregate.cpu_utilization() * 100.0
+        aggregate.budget_utilization() * 100.0
     );
 }
 
@@ -394,6 +399,26 @@ mod tests {
             assert_eq!(metrics.waiting_time(), Some(0));
             assert_eq!(metrics.turnaround_time(), Some(2));
             assert_eq!(metrics.response_time(), Some(0));
+        }
+    }
+
+    #[test]
+    fn budget_utilization_accounts_for_unused_capacity() {
+        for policy in [
+            SchedulerPolicy::fifo(),
+            SchedulerPolicy::priority(),
+            SchedulerPolicy::round_robin(2),
+        ] {
+            let mut engine = FixedTickEngine::new(policy, 16);
+            for task in encounter_tasks() {
+                engine.add_task(task);
+            }
+
+            let report = engine.run_tick();
+            assert_eq!(report.work_units, 14);
+            assert_eq!(report.idle_units, 2);
+            assert_eq!(engine.pending_tasks(), 0);
+            assert_eq!(engine.aggregate_metrics().budget_utilization(), 0.875);
         }
     }
 }
