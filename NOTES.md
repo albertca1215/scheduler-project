@@ -12,7 +12,8 @@ The initial scheduler model is in `src/scheduler.rs`:
 - `DeadlineType` distinguishes hard, soft, and event-driven work.
 - `BehaviorType` identifies movement, chasing, fleeing, pouncing, knockback, collision checks, periodic color changes, and collision-triggered color changes. The color behaviors are retained for the examples but are not used by the main application.
 - `Scheduler` defines the queue operations required by scheduler implementations.
-- `FifoScheduler` is the baseline implementation and supports re-queuing unfinished work.
+- `FifoScheduler` selects from the front and returns unfinished work to the
+  back when the tick budget runs out. It is not strict non-preemptive FIFO.
 
 The current deadline value is an absolute tick. A task is overdue when the current tick is greater than its deadline.
 
@@ -40,8 +41,9 @@ a budget of four work units and an RR quantum of two. `interactive` opens a
 text-based prompt for policy, budget, and, for Round Robin, quantum. Direct
 policy commands provide reproducible one-policy runs for screenshots and tables.
 
-The demo uses the same shared hamster-encounter workload for FIFO, Priority,
-and Round Robin. It records tasks started, completed, and left incomplete in
+The demo uses the same fixed eight-task workload for FIFO, Priority, and Round
+Robin. All tasks enter the queue at the start; no new tasks arrive during the
+run. It records tasks started, completed, and left incomplete in
 each tick, along with queue depth and per-task timing metrics. It also prints
 aggregate throughput and CPU utilization.
 
@@ -214,10 +216,15 @@ budget, and scheduler log so the work distribution remains observable.
 
 The interactive demonstration supports:
 
+- **FIFO:** select in queue insertion order, but return unfinished tasks to
+  the back when the tick budget runs out. Unlike strict non-preemptive FIFO,
+  this can allow other tasks to run before a task finishes.
 - **Priority:** select the ready task with the highest scheduling precedence.
-  Lower numeric priority values represent higher precedence.
-- **Round Robin:** re-queue unfinished work and rotate ready tasks so that
-  waiting tasks receive a fair turn. The initial policy quantum is 2 work units.
+  Lower numeric values represent higher precedence; unfinished tasks return
+  to the back of their own priority queue.
+- **Round Robin:** select in queue order and rotate unfinished tasks to the
+  back. Its per-selection quantum is initially 2 work units; a task can
+  receive multiple turns during one tick if budget remains.
 - **MLFQ:** future work after the current FIFO, Priority, and Round Robin policies.
 
 ## Metrics

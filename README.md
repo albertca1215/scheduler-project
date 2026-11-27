@@ -91,11 +91,22 @@ remaining tick budget, and the scheduler's quantum. FIFO and Priority do not
 impose an additional per-selection quantum. Unfinished work is requeued with
 its remaining cost.
 
-- **FIFO:** selects in queue order; unfinished tasks return to the back.
+- **FIFO:** selects in queue insertion order. If a task exhausts the remaining
+  tick budget before finishing, it returns to the back of the queue. This is
+  not strict non-preemptive FIFO; there is no separate per-task quantum.
 - **Priority:** selects the lowest numeric priority, with FIFO order among
-  tasks of equal priority; unfinished tasks return to their priority queue.
+  tasks of equal priority. An unfinished task returns to the back of its
+  priority queue.
 - **Round Robin:** selects in queue order and rotates unfinished tasks to the
-  back after at most its configured quantum. It ignores priority.
+  back after at most its configured per-selection quantum. It ignores priority
+  and can select the same task again within a tick if budget remains.
+
+The terminal demo submits one fixed batch; the live simulation waits for its
+current batch to drain before creating the next. This finite workload prevents
+new arrivals from indefinitely delaying that batch, but is not a general
+starvation-prevention algorithm. A real ready queue can receive new work while
+existing tasks are waiting. Retaining a task's remaining cost models progress
+across selections, not a full OS context switch.
 
 The live simulation uses these costs and Priority values:
 
